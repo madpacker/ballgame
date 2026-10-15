@@ -20,7 +20,9 @@
         "backgroundColor": "#000000"
       },
       "package": "com.emergent.ballgameid.h3i719",
-      "permissions": ["READ_MEDIA_IMAGES"]
+      "permissions": [
+        "READ_MEDIA_IMAGES"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -41,11 +43,13 @@
       "expo-font",
       "expo-image",
       "expo-image-picker",
+      "expo-audio",
       "expo-secure-store",
       "expo-web-browser",
       "expo-status-bar",
       "expo-sharing",
-      "@react-native-vector-icons/ionicons"
+      "@react-native-vector-icons/ionicons",
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true

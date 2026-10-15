@@ -67,6 +67,7 @@ export default function QuizScreen() {
         score: String(score),
         correct: String(correctCount),
         total: String(mode === "classic" ? CLASSIC_COUNT : correctCount + (index - correctCount)),
+        ...(params.challenge ? { challenge: String(params.challenge) } : {}),
       },
     });
   };

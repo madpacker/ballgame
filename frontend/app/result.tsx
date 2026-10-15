@@ -1,4 +1,4 @@
-import { View, Text, Pressable, StyleSheet, ScrollView, Platform } from "react-native";
+import { View, Text, Pressable, StyleSheet, ScrollView, Platform, Share as RNShare } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
@@ -7,12 +7,16 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { useEffect, useState } from "react";
 import * as Sharing from "expo-sharing";
 import * as Haptics from "expo-haptics";
+import * as Clipboard from "expo-clipboard";
 
 import { colors, radius, spacing } from "@/src/theme";
 import { BACKGROUNDS, CATEGORY_LABEL } from "@/src/data/quiz";
 import { useAuth } from "@/src/contexts/auth";
 import { api } from "@/src/api";
 import { getLocalHigh, updateLocalHigh } from "@/src/storage/localHigh";
+import { playTrumpet } from "@/src/hooks/useTrumpet";
+
+const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 export default function ResultScreen() {
   const insets = useSafeAreaInsets();
@@ -23,6 +27,7 @@ export default function ResultScreen() {
     score: string;
     correct: string;
     total: string;
+    challenge?: string;
   }>();
 
   const score = parseInt(params.score || "0", 10) || 0;
@@ -30,6 +35,7 @@ export default function ResultScreen() {
   const total = Math.max(parseInt(params.total || "0", 10) || 0, correct);
   const mode = params.mode || "classic";
   const category = params.category || "all";
+  const challengeId = params.challenge;
   const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0;
 
   const { user, refreshUser } = useAuth();
@@ -38,15 +44,19 @@ export default function ResultScreen() {
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [streakInfo, setStreakInfo] = useState<{ streak: number; bonus: number } | null>(null);
+  const [challengeResult, setChallengeResult] = useState<{ beat: boolean; score_to_beat: number } | null>(null);
+  const [createdChallenge, setCreatedChallenge] = useState<{ id: string; url: string } | null>(null);
 
   useEffect(() => {
     (async () => {
       const prev = (await getLocalHigh())[mode as "classic" | "time_attack"] ?? 0;
       const next = await updateLocalHigh(mode as "classic" | "time_attack", score);
       setPersonalHigh(next[mode as "classic" | "time_attack"]);
-      setNewRecord(score > prev && score > 0);
-      if (Platform.OS !== "web" && score > prev && score > 0) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const isRecord = score > prev && score > 0;
+      setNewRecord(isRecord);
+      if (isRecord) {
+        if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        playTrumpet();
       }
     })();
   }, [mode, score]);
@@ -65,6 +75,14 @@ export default function ResultScreen() {
       })
       .catch(() => {})
       .finally(() => setSubmitting(false));
+    if (challengeId) {
+      api<{ beat: boolean; score_to_beat: number }>(`/challenges/${challengeId}/complete`, {
+        method: "POST",
+        body: JSON.stringify({ score }),
+      })
+        .then(setChallengeResult)
+        .catch(() => {});
+    }
   }, [user]);
 
   const share = async () => {
@@ -78,15 +96,31 @@ export default function ResultScreen() {
         }
         return;
       }
-      const available = await Sharing.isAvailableAsync();
-      if (available) {
-        // expo-sharing requires a file; fall back to clipboard-like message isn't supported.
-        // Use Share API from react-native via dynamic import to avoid extra dep.
-        const { Share } = await import("react-native");
-        await Share.share({ message: msg });
+      await RNShare.share({ message: msg });
+    } catch {}
+  };
+
+  const challengeFriend = async () => {
+    if (!user) {
+      router.push("/login");
+      return;
+    }
+    try {
+      const r = await api<{ challenge_id: string }>("/challenges/create", {
+        method: "POST",
+        body: JSON.stringify({ score, mode, category }),
+      });
+      const url = `${BACKEND}/challenge/${r.challenge_id}`;
+      setCreatedChallenge({ id: r.challenge_id, url });
+      const msg = `⚔️ Aku menantangmu di Cak Mad Quiz!\nKalahkan skorku ${score} (${mode === "classic" ? "Classic" : "Time Attack"}).\n${url}`;
+      if (Platform.OS === "web") {
+        if ((navigator as any).share) {
+          await (navigator as any).share({ title: "Rematch Challenge", text: msg, url });
+        } else {
+          await Clipboard.setStringAsync(msg);
+        }
       } else {
-        const { Share } = await import("react-native");
-        await Share.share({ message: msg });
+        await RNShare.share({ message: msg });
       }
     } catch {}
   };
@@ -156,6 +190,28 @@ export default function ResultScreen() {
           </Pressable>
         )}
 
+        {challengeId && challengeResult && (
+          <View style={[styles.statusCard, { borderColor: challengeResult.beat ? colors.success : colors.error, borderWidth: 1.5 }]}>
+            <Ionicons
+              name={challengeResult.beat ? "trophy" : "sad"}
+              size={22}
+              color={challengeResult.beat ? colors.brandSecondary : colors.error}
+            />
+            <Text style={styles.statusTxt}>
+              {challengeResult.beat
+                ? `Kamu KALAHKAN tantangan ${challengeResult.score_to_beat}! Notifikasi dikirim ke penantang.`
+                : `Belum mengalahkan ${challengeResult.score_to_beat}. Coba lagi!`}
+            </Text>
+          </View>
+        )}
+
+        {createdChallenge && (
+          <View style={styles.statusCard}>
+            <Ionicons name="link" size={20} color={colors.brandSecondary} />
+            <Text numberOfLines={1} style={styles.statusTxt}>Link rematch tersalin: {createdChallenge.url}</Text>
+          </View>
+        )}
+
         {streakInfo && (
           <View style={styles.streakCard}>
             <Text style={{ fontSize: 28 }}>🔥</Text>
@@ -168,9 +224,16 @@ export default function ResultScreen() {
       </ScrollView>
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + spacing.md }]}>
+        <Pressable
+          testID="rematch-button"
+          onPress={challengeFriend}
+          style={styles.rematchBtn}
+        >
+          <Ionicons name="flash" size={18} color={colors.onBrandSecondary} />
+          <Text style={styles.rematchTxt}>TANTANG TEMAN</Text>
+        </Pressable>
         <Pressable testID="share-button" onPress={share} style={styles.secondaryBtn}>
           <Ionicons name="share-social" size={18} color={colors.onSurface} />
-          <Text style={styles.secondaryTxt}>Bagikan</Text>
         </Pressable>
         <Pressable
           testID="play-again-button"
@@ -296,16 +359,26 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   secondaryBtn: {
-    flex: 1,
+    width: 56,
     backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.lg,
     paddingVertical: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: spacing.sm as number,
     borderWidth: 1,
     borderColor: colors.border,
   },
   secondaryTxt: { color: colors.onSurface, fontWeight: "700", fontSize: 14 },
+  rematchBtn: {
+    flex: 1,
+    backgroundColor: colors.brandSecondary,
+    borderRadius: radius.lg,
+    paddingVertical: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm as number,
+  },
+  rematchTxt: { color: colors.onBrandSecondary, fontWeight: "900", fontSize: 13, letterSpacing: 1.5 },
 });

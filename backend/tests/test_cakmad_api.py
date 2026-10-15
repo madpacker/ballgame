@@ -627,3 +627,158 @@ class TestRegressionIter4:
         r = api_client.get(f"{base_url}/api/notifications")
         assert r.status_code == 401
         assert r.json().get("detail") == "missing_token"
+
+
+# ---------- Iteration 5: Rematch Challenges ----------
+class TestChallengesCreate:
+    """POST /api/challenges/create — auth required."""
+
+    def test_create_without_auth(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/challenges/create",
+            json={"score": 100, "mode": "classic", "category": "all"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_create_with_invalid_bearer(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/challenges/create",
+            headers={"Authorization": "Bearer invalid-xyz"},
+            json={"score": 100, "mode": "classic", "category": "all"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+    def test_create_with_malformed_header(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/challenges/create",
+            headers={"Authorization": "NotBearer sometoken"},
+            json={"score": 100, "mode": "classic", "category": "all"},
+        )
+        assert r.status_code == 401, r.text
+
+
+class TestChallengesGet:
+    """GET /api/challenges/{id} — public (no auth)."""
+
+    def test_get_nonexistent_returns_404(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/challenges/ch_nonexistent12345")
+        assert r.status_code == 404, r.text
+        assert r.json().get("detail") == "challenge_not_found"
+
+    def test_get_is_public_no_auth_required(self, api_client, base_url):
+        # No Authorization header: must NOT return 401 — endpoint is public.
+        # Non-existent id yields 404, which proves auth is not enforced here.
+        r = api_client.get(f"{base_url}/api/challenges/anything-random")
+        assert r.status_code != 401, (
+            f"GET /api/challenges/{{id}} should be public but returned 401. Body: {r.text}"
+        )
+        assert r.status_code == 404, r.text
+        assert r.json().get("detail") == "challenge_not_found"
+
+    def test_get_with_bogus_bearer_still_404_not_401(self, api_client, base_url):
+        # Even with a bad bearer, since endpoint has no Depends(get_current_user),
+        # it should ignore the header and return 404 for a missing id.
+        r = api_client.get(
+            f"{base_url}/api/challenges/ch_doesnotexist",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 404, r.text
+        assert r.json().get("detail") == "challenge_not_found"
+
+
+class TestChallengesComplete:
+    """POST /api/challenges/{id}/complete — auth required."""
+
+    def test_complete_without_auth(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/challenges/ch_whatever/complete",
+            json={"score": 123},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_complete_with_invalid_bearer(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/challenges/ch_whatever/complete",
+            headers={"Authorization": "Bearer invalid-xyz"},
+            json={"score": 123},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+    def test_complete_with_malformed_header(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/challenges/ch_whatever/complete",
+            headers={"Authorization": "NotBearer sometoken"},
+            json={"score": 123},
+        )
+        assert r.status_code == 401, r.text
+
+    def test_complete_nonexistent_id_without_auth_is_401_not_404(
+        self, api_client, base_url
+    ):
+        # Auth is resolved before the DB lookup, so missing auth → 401 even
+        # for a non-existent challenge id.
+        r = api_client.post(
+            f"{base_url}/api/challenges/ch_definitely_absent/complete",
+            json={"score": 999999},
+        )
+        assert r.status_code == 401, r.text
+
+
+# ---------- Iteration 5: Mongo indexes for challenges ----------
+class TestChallengesIndexes:
+    @pytest.fixture(scope="class")
+    def mongo_db(self):
+        url = os.environ.get("MONGO_URL") or "mongodb://localhost:27017"
+        name = os.environ.get("DB_NAME") or "test_database"
+        try:
+            from dotenv import dotenv_values
+            vals = dotenv_values("/app/backend/.env")
+            url = vals.get("MONGO_URL", url)
+            name = vals.get("DB_NAME", name)
+        except Exception:
+            pass
+        client = MongoClient(url)
+        yield client[name]
+        client.close()
+
+    def test_challenges_challenge_id_unique_index(self, mongo_db):
+        idx = mongo_db.challenges.index_information()
+        cid = [v for v in idx.values() if tuple(f[0] for f in v.get("key", [])) == ("challenge_id",)]
+        assert cid, f"challenge_id index missing. Have: {list(idx.keys())}"
+        assert any(v.get("unique") for v in cid), "challenge_id index not unique"
+
+    def test_challenges_from_user_created_index(self, mongo_db):
+        idx = mongo_db.challenges.index_information()
+        keys_sets = {tuple(f for f in v.get("key", [])): v for v in idx.values()}
+        comp = keys_sets.get((("from_user_id", 1), ("created_at", -1)))
+        assert comp is not None, (
+            f"(from_user_id ASC, created_at DESC) index missing. Have: {list(keys_sets.keys())}"
+        )
+
+
+# ---------- Iteration 5: Regression on iterations 1-4 ----------
+class TestRegressionIter5:
+    def test_api_root(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/")
+        assert r.status_code == 200
+        assert "Cak Mad Quiz" in r.json().get("message", "")
+
+    def test_weekly_theme_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/weekly-theme")
+        assert r.status_code == 200
+        data = r.json()
+        assert "week_key" in data and "id" in data
+
+    def test_leaderboard_weekly_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard/weekly")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_notifications_requires_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/notifications")
+        assert r.status_code == 401
+        assert r.json().get("detail") == "missing_token"

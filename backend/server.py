@@ -761,6 +761,29 @@ class BadgeOut(BaseModel):
     created_at: datetime
 
 
+class ChallengeCreate(BaseModel):
+    score: int
+    mode: Literal["classic", "time_attack"]
+    category: str
+    theme_id: Optional[str] = None
+
+
+class ChallengeComplete(BaseModel):
+    score: int
+
+
+class ChallengeOut(BaseModel):
+    challenge_id: str
+    from_user_id: str
+    from_name: str
+    from_picture: Optional[str] = None
+    score_to_beat: int
+    mode: str
+    category: str
+    theme_id: Optional[str] = None
+    created_at: datetime
+
+
 @api_router.get("/me/badges", response_model=List[BadgeOut])
 async def my_badges(user: dict = Depends(get_current_user), limit: int = 30):
     cursor = (
@@ -813,6 +836,53 @@ async def my_skins(user: dict = Depends(get_current_user)):
     }
 
 
+# ---------- Rematch Challenges ----------
+@api_router.post("/challenges/create", response_model=ChallengeOut)
+async def challenges_create(body: ChallengeCreate, user: dict = Depends(get_current_user)):
+    doc = {
+        "challenge_id": f"ch_{uuid.uuid4().hex[:12]}",
+        "from_user_id": user["user_id"],
+        "from_name": user["name"],
+        "from_picture": user.get("picture"),
+        "score_to_beat": int(body.score),
+        "mode": body.mode,
+        "category": body.category,
+        "theme_id": body.theme_id,
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.challenges.insert_one(doc)
+    return ChallengeOut(**{k: v for k, v in doc.items() if k in ChallengeOut.model_fields})
+
+
+@api_router.get("/challenges/{challenge_id}", response_model=ChallengeOut)
+async def challenges_get(challenge_id: str):
+    doc = await db.challenges.find_one({"challenge_id": challenge_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="challenge_not_found")
+    return ChallengeOut(**{k: v for k, v in doc.items() if k in ChallengeOut.model_fields})
+
+
+@api_router.post("/challenges/{challenge_id}/complete")
+async def challenges_complete(
+    challenge_id: str, body: ChallengeComplete, user: dict = Depends(get_current_user)
+):
+    doc = await db.challenges.find_one({"challenge_id": challenge_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="challenge_not_found")
+    beat = int(body.score) > int(doc["score_to_beat"])
+    if beat and doc["from_user_id"] != user["user_id"]:
+        try:
+            await push_notification(
+                doc["from_user_id"],
+                "challenge",
+                f"{user['name']} mengalahkan tantanganmu! Skor {body.score} > {doc['score_to_beat']}.",
+                from_user=user,
+            )
+        except Exception:
+            pass
+    return {"ok": True, "beat": beat, "score_to_beat": doc["score_to_beat"]}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -854,6 +924,8 @@ async def startup_indexes():
         await db.badges.create_index(
             [("user_id", 1), ("week_key", 1), ("mode", 1), ("rank", 1)], unique=True
         )
+        await db.challenges.create_index("challenge_id", unique=True)
+        await db.challenges.create_index([("from_user_id", 1), ("created_at", -1)])
     except Exception as e:
         logger.warning("index creation issue: %s", e)
 
