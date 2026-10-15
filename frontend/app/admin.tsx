@@ -39,6 +39,7 @@ export default function AdminScreen() {
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; txt: string } | null>(null);
   const [players, setPlayers] = useState<ApiPlayer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
 
   const refresh = async () => {
     setLoading(true);
@@ -161,6 +162,19 @@ export default function AdminScreen() {
     } catch {}
   };
 
+  const seedDemo = async () => {
+    setSeeding(true);
+    try {
+      const r = await api<{ inserted: number; total: number }>("/admin/seed-players", { method: "POST" });
+      setMsg({ kind: "ok", txt: `+${r.inserted} pemain demo (total ${r.total}).` });
+      refresh();
+    } catch {
+      setMsg({ kind: "err", txt: "Gagal seed." });
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
@@ -274,7 +288,24 @@ export default function AdminScreen() {
         </View>
 
         <View>
-          <Text style={styles.sectionLabel}>SEMUA PEMAIN · {players.length}</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionLabel}>SEMUA PEMAIN · {players.length}</Text>
+            <Pressable
+              testID="seed-demo-button"
+              onPress={seedDemo}
+              disabled={seeding}
+              style={[styles.seedBtn, seeding && { opacity: 0.5 }]}
+            >
+              {seeding ? (
+                <ActivityIndicator size="small" color={colors.onBrandSecondary} />
+              ) : (
+                <>
+                  <Ionicons name="sparkles" size={14} color={colors.onBrandSecondary} />
+                  <Text style={styles.seedTxt}>SEED DEMO</Text>
+                </>
+              )}
+            </Pressable>
+          </View>
           {loading && <ActivityIndicator color={colors.brandPrimary} />}
           {!loading && players.length === 0 && (
             <Text style={styles.muted}>Belum ada pemain. Tambahkan di atas.</Text>
@@ -396,6 +427,22 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginBottom: spacing.sm,
   },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.md,
+  },
+  seedBtn: {
+    flexDirection: "row",
+    gap: 4,
+    alignItems: "center",
+    backgroundColor: colors.brandSecondary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+  },
+  seedTxt: { color: colors.onBrandSecondary, fontWeight: "900", fontSize: 10, letterSpacing: 1 },
   photoPicker: {
     width: "100%",
     aspectRatio: 4 / 5,

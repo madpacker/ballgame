@@ -7,6 +7,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 
 import { AuthProvider, useAuth } from "@/src/contexts/auth";
+import { SkinProvider } from "@/src/contexts/skin";
 import { colors } from "@/src/theme";
 
 LogBox.ignoreAllLogs(true);
@@ -50,8 +51,10 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <KeyboardProvider>
           <AuthProvider>
-            <StatusBar style="light" />
-            <RootGate />
+            <SkinProvider>
+              <StatusBar style="light" />
+              <RootGate />
+            </SkinProvider>
           </AuthProvider>
         </KeyboardProvider>
       </SafeAreaProvider>

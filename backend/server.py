@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 from datetime import datetime, timezone, timedelta
 
+from seed_players import SEED_PLAYERS
+
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -279,6 +281,7 @@ async def auth_logout(authorization: Optional[str] = Header(default=None)):
 # ---------- Scores & Leaderboard ----------
 @api_router.post("/scores")
 async def submit_score(body: ScoreSubmit, user: dict = Depends(get_current_user)):
+    now = datetime.now(timezone.utc)
     doc = {
         "entry_id": f"sc_{uuid.uuid4().hex[:12]}",
         "user_id": user["user_id"],
@@ -289,9 +292,15 @@ async def submit_score(body: ScoreSubmit, user: dict = Depends(get_current_user)
         "category": body.category,
         "correct": int(body.correct),
         "total": int(body.total),
-        "created_at": datetime.now(timezone.utc),
+        "week_key": _week_key(now),
+        "created_at": now,
     }
     await db.scores.insert_one(doc)
+    # Trigger weekly rollover check lazily on each submit.
+    try:
+        await _ensure_weekly_rollover()
+    except Exception:
+        pass
     best = await db.best_scores.find_one(
         {"user_id": user["user_id"], "mode": body.mode}, {"_id": 0}
     )
@@ -386,6 +395,15 @@ async def friends_follow(body: FollowIn, user: dict = Depends(get_current_user))
         {"$set": {"follower_id": user["user_id"], "following_id": target["user_id"], "created_at": datetime.now(timezone.utc)}},
         upsert=True,
     )
+    try:
+        await push_notification(
+            target["user_id"],
+            "follow",
+            f"{user['name']} mulai mengikutimu.",
+            from_user=user,
+        )
+    except Exception:
+        pass
     return {"ok": True, "friend": FriendOut(user_id=target["user_id"], username=target.get("username", ""), name=target["name"], picture=target.get("picture"))}
 
 
@@ -512,6 +530,185 @@ async def files_get(full_path: str):
     return Response(content=data, media_type=ctype)
 
 
+# ---------- Seed demo players (admin) ----------
+@api_router.post("/admin/seed-players")
+async def seed_players_endpoint(user: dict = Depends(require_admin)):
+    inserted = 0
+    for p in SEED_PLAYERS:
+        existing = await db.players.find_one(
+            {"name": p["name"], "deleted_at": {"$exists": False}}, {"_id": 0}
+        )
+        if existing:
+            continue
+        doc = {
+            "player_id": f"pl_{uuid.uuid4().hex[:12]}",
+            "name": p["name"],
+            "position": p["position"],
+            "years_at_mu": p.get("years_at_mu"),
+            "previous_clubs": p.get("previous_clubs", []),
+            "included_in_quiz": True,
+            "photo_url": None,
+            "created_at": datetime.now(timezone.utc),
+            "created_by": user["user_id"],
+        }
+        await db.players.insert_one(doc)
+        inserted += 1
+    return {"ok": True, "inserted": inserted, "total": await db.players.count_documents({"deleted_at": {"$exists": False}})}
+
+
+# ---------- Notifications ----------
+class NotificationOut(BaseModel):
+    notification_id: str
+    kind: str  # "follow", "badge"
+    from_user_id: Optional[str] = None
+    from_name: Optional[str] = None
+    from_picture: Optional[str] = None
+    message: str
+    read: bool
+    created_at: datetime
+
+
+async def push_notification(user_id: str, kind: str, message: str, from_user: Optional[dict] = None):
+    doc = {
+        "notification_id": f"nt_{uuid.uuid4().hex[:12]}",
+        "user_id": user_id,
+        "kind": kind,
+        "message": message,
+        "from_user_id": from_user.get("user_id") if from_user else None,
+        "from_name": from_user.get("name") if from_user else None,
+        "from_picture": from_user.get("picture") if from_user else None,
+        "read": False,
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.notifications.insert_one(doc)
+
+
+@api_router.get("/notifications", response_model=List[NotificationOut])
+async def notifications_list(user: dict = Depends(get_current_user), limit: int = 50):
+    cursor = (
+        db.notifications.find({"user_id": user["user_id"]}, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    results: List[NotificationOut] = []
+    async for n in cursor:
+        results.append(NotificationOut(**{k: v for k, v in n.items() if k != "user_id"}))
+    return results
+
+
+@api_router.get("/notifications/unread-count")
+async def notifications_unread(user: dict = Depends(get_current_user)):
+    count = await db.notifications.count_documents({"user_id": user["user_id"], "read": False})
+    return {"count": count}
+
+
+@api_router.post("/notifications/read-all")
+async def notifications_read_all(user: dict = Depends(get_current_user)):
+    await db.notifications.update_many(
+        {"user_id": user["user_id"], "read": False}, {"$set": {"read": True}}
+    )
+    return {"ok": True}
+
+
+# ---------- Weekly leaderboard & badges ----------
+def _week_key(dt: datetime) -> str:
+    iso = dt.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
+async def _ensure_weekly_rollover():
+    """When a new ISO week starts, freeze last week's top-3 into badges collection."""
+    now = datetime.now(timezone.utc)
+    cur_key = _week_key(now)
+    setting = await db.app_settings.find_one({"_key": "weekly"}, {"_id": 0})
+    last_key = setting.get("current_week_key") if setting else None
+    if last_key == cur_key:
+        return
+    if last_key:
+        # Snapshot top-3 per mode for last_key.
+        for mode in ("classic", "time_attack"):
+            cursor = (
+                db.scores.find({"mode": mode, "week_key": last_key}, {"_id": 0})
+                .sort("score", -1)
+            )
+            seen = set()
+            rank = 0
+            async for s in cursor:
+                if s["user_id"] in seen:
+                    continue
+                seen.add(s["user_id"])
+                rank += 1
+                if rank > 3:
+                    break
+                await db.badges.update_one(
+                    {"user_id": s["user_id"], "week_key": last_key, "mode": mode, "rank": rank},
+                    {
+                        "$set": {
+                            "badge_id": f"bg_{uuid.uuid4().hex[:12]}",
+                            "user_id": s["user_id"],
+                            "week_key": last_key,
+                            "mode": mode,
+                            "rank": rank,
+                            "score": s["score"],
+                            "created_at": datetime.now(timezone.utc),
+                        }
+                    },
+                    upsert=True,
+                )
+                try:
+                    label = {1: "🥇 Juara 1", 2: "🥈 Juara 2", 3: "🥉 Juara 3"}[rank]
+                    mode_label = "Classic" if mode == "classic" else "Time Attack"
+                    await push_notification(
+                        s["user_id"],
+                        "badge",
+                        f"{label} {mode_label} minggu {last_key}! Skor {s['score']}",
+                    )
+                except Exception:
+                    pass
+    await db.app_settings.update_one(
+        {"_key": "weekly"},
+        {"$set": {"_key": "weekly", "current_week_key": cur_key, "updated_at": now}},
+        upsert=True,
+    )
+
+
+@api_router.get("/leaderboard/weekly", response_model=List[LeaderboardEntry])
+async def weekly_leaderboard(mode: str = "classic", limit: int = 50):
+    await _ensure_weekly_rollover()
+    cur_key = _week_key(datetime.now(timezone.utc))
+    # Highest score per user within current week.
+    cursor = db.scores.find({"mode": mode, "week_key": cur_key}, {"_id": 0}).sort("score", -1)
+    best_per_user: dict[str, dict] = {}
+    async for s in cursor:
+        uid = s["user_id"]
+        if uid not in best_per_user:
+            best_per_user[uid] = s
+    results = [LeaderboardEntry(**v) for v in list(best_per_user.values())[:limit]]
+    return results
+
+
+class BadgeOut(BaseModel):
+    badge_id: str
+    week_key: str
+    mode: str
+    rank: int
+    score: int
+    created_at: datetime
+
+
+@api_router.get("/me/badges", response_model=List[BadgeOut])
+async def my_badges(user: dict = Depends(get_current_user), limit: int = 30):
+    cursor = (
+        db.badges.find({"user_id": user["user_id"]}, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    results: List[BadgeOut] = []
+    async for b in cursor:
+        results.append(BadgeOut(**{k: v for k, v in b.items() if k in BadgeOut.model_fields}))
+    return results
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -546,6 +743,13 @@ async def startup_indexes():
         await db.friendships.create_index("follower_id")
         await db.players.create_index("player_id", unique=True)
         await db.players.create_index("included_in_quiz")
+        await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
+        await db.notifications.create_index([("user_id", 1), ("read", 1)])
+        await db.scores.create_index([("mode", 1), ("week_key", 1), ("score", -1)])
+        await db.badges.create_index([("user_id", 1), ("created_at", -1)])
+        await db.badges.create_index(
+            [("user_id", 1), ("week_key", 1), ("mode", 1), ("rank", 1)], unique=True
+        )
     except Exception as e:
         logger.warning("index creation issue: %s", e)
 

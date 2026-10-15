@@ -9,17 +9,37 @@ import * as Haptics from "expo-haptics";
 
 import { colors, radius, spacing } from "@/src/theme";
 import { useAuth } from "@/src/contexts/auth";
+import { useSkin, SKINS, type SkinKey } from "@/src/contexts/skin";
 import { getLocalHigh, type LocalHigh } from "@/src/storage/localHigh";
+import { api } from "@/src/api";
+
+type Badge = {
+  badge_id: string;
+  week_key: string;
+  mode: string;
+  rank: number;
+  score: number;
+};
 
 export default function Profile() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, signOut } = useAuth();
+  const { skin, setSkin } = useSkin();
   const [high, setHigh] = useState<LocalHigh>({ classic: 0, time_attack: 0 });
+  const [badges, setBadges] = useState<Badge[]>([]);
 
   useEffect(() => {
     getLocalHigh().then(setHigh);
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      api<Badge[]>("/me/badges").then(setBadges).catch(() => setBadges([]));
+    } else {
+      setBadges([]);
+    }
+  }, [user]);
 
   const copyCode = async () => {
     if (!user) return;
@@ -85,6 +105,53 @@ export default function Profile() {
           <Text style={styles.linkTxt}>Teman</Text>
           <Ionicons name="chevron-forward" size={20} color={colors.muted} />
         </Pressable>
+
+        {user && (
+          <View style={styles.skinCard}>
+            <Text style={styles.skinLabel}>TEMA JERSEY QUIZ</Text>
+            <View style={styles.skinRow}>
+              {(Object.keys(SKINS) as SkinKey[]).map((k) => {
+                const s = SKINS[k];
+                const active = skin === k;
+                return (
+                  <Pressable
+                    key={k}
+                    testID={`skin-${k}`}
+                    onPress={() => setSkin(k)}
+                    style={[styles.skinChip, active && styles.skinChipActive]}
+                  >
+                    <View style={[styles.skinSwatch, { backgroundColor: s.primary }]} />
+                    <Text style={styles.skinName}>{s.label.split(" · ")[0]}</Text>
+                    {active && (
+                      <Ionicons name="checkmark-circle" size={14} color={colors.brandSecondary} />
+                    )}
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.skinHint}>{SKINS[skin].description}</Text>
+          </View>
+        )}
+
+        {user && badges.length > 0 && (
+          <View style={styles.badgeCard}>
+            <Text style={styles.skinLabel}>PIAGAM MINGGUAN · {badges.length}</Text>
+            <View style={styles.badgeGrid}>
+              {badges.slice(0, 6).map((b) => (
+                <View key={b.badge_id} style={styles.badge}>
+                  <Text style={styles.badgeEmoji}>
+                    {b.rank === 1 ? "🥇" : b.rank === 2 ? "🥈" : "🥉"}
+                  </Text>
+                  <Text style={styles.badgeMode}>
+                    {b.mode === "classic" ? "Classic" : "Time Attack"}
+                  </Text>
+                  <Text style={styles.badgeWeek}>{b.week_key}</Text>
+                  <Text style={styles.badgeScore}>{b.score}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
 
         <Pressable
           testID="leaderboard-link"
@@ -181,6 +248,57 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   codeTxt: { color: colors.brandSecondary, fontWeight: "900", fontSize: 14, letterSpacing: 2 },
+  skinCard: {
+    backgroundColor: colors.surfaceSecondary,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  skinLabel: {
+    color: colors.muted,
+    fontSize: 11,
+    letterSpacing: 2,
+    fontWeight: "700",
+    marginBottom: spacing.md,
+  },
+  skinRow: { flexDirection: "row", gap: spacing.sm as number },
+  skinChip: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceTertiary,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+  },
+  skinChipActive: { borderColor: colors.brandSecondary, backgroundColor: colors.brandTertiary },
+  skinSwatch: { width: 16, height: 16, borderRadius: 8, borderWidth: 1, borderColor: colors.border },
+  skinName: { color: colors.onSurface, fontSize: 11, fontWeight: "800", letterSpacing: 1 },
+  skinHint: { color: colors.muted, fontSize: 12, marginTop: spacing.md },
+  badgeCard: {
+    backgroundColor: colors.surfaceSecondary,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  badgeGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm as number },
+  badge: {
+    width: "31%",
+    backgroundColor: colors.brandTertiary,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    alignItems: "center",
+  },
+  badgeEmoji: { fontSize: 24 },
+  badgeMode: { color: colors.onBrandTertiary, fontSize: 10, fontWeight: "800", marginTop: 2 },
+  badgeWeek: { color: colors.muted, fontSize: 9, marginTop: 2 },
+  badgeScore: { color: colors.brandSecondary, fontWeight: "900", fontSize: 14, marginTop: 2 },
   statGrid: { flexDirection: "row", gap: spacing.md as number },
   stat: {
     flex: 1,

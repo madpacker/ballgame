@@ -189,6 +189,164 @@ class TestMongoIndexes:
         assert pid, f"player_id index missing. Have: {list(idx.keys())}"
         assert any(v.get("unique") for v in pid), "player_id index not unique"
 
+    # ---------- Iteration 3 index checks ----------
+    def test_notifications_user_created_index(self, mongo_db):
+        idx = mongo_db.notifications.index_information()
+        keys_sets = {tuple(f for f in v.get("key", [])): v for v in idx.values()}
+        comp = keys_sets.get((("user_id", 1), ("created_at", -1)))
+        assert comp is not None, (
+            f"(user_id ASC, created_at DESC) index missing. Have: {list(keys_sets.keys())}"
+        )
+
+    def test_notifications_user_read_index(self, mongo_db):
+        idx = mongo_db.notifications.index_information()
+        keys_sets = {tuple(f for f in v.get("key", [])): v for v in idx.values()}
+        comp = keys_sets.get((("user_id", 1), ("read", 1)))
+        assert comp is not None, (
+            f"(user_id, read) index missing. Have: {list(keys_sets.keys())}"
+        )
+
+    def test_scores_mode_week_score_index(self, mongo_db):
+        idx = mongo_db.scores.index_information()
+        keys_sets = {tuple(f for f in v.get("key", [])): v for v in idx.values()}
+        comp = keys_sets.get((("mode", 1), ("week_key", 1), ("score", -1)))
+        assert comp is not None, (
+            f"(mode, week_key, score DESC) index missing. Have: {list(keys_sets.keys())}"
+        )
+
+    def test_badges_user_created_index(self, mongo_db):
+        idx = mongo_db.badges.index_information()
+        keys_sets = {tuple(f for f in v.get("key", [])): v for v in idx.values()}
+        comp = keys_sets.get((("user_id", 1), ("created_at", -1)))
+        assert comp is not None, (
+            f"(user_id, created_at DESC) index missing. Have: {list(keys_sets.keys())}"
+        )
+
+    def test_badges_user_week_mode_rank_unique_index(self, mongo_db):
+        idx = mongo_db.badges.index_information()
+        keys_sets = {tuple(f[0] for f in v.get("key", [])): v for v in idx.values()}
+        comp = keys_sets.get(("user_id", "week_key", "mode", "rank"))
+        assert comp is not None, (
+            f"(user_id, week_key, mode, rank) composite index missing. Have: {list(keys_sets.keys())}"
+        )
+        assert comp.get("unique"), "(user_id, week_key, mode, rank) index not unique"
+
+
+# ---------- Iteration 3: Weekly leaderboard (public) ----------
+class TestWeeklyLeaderboard:
+    def test_weekly_classic_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard/weekly?mode=classic")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+
+    def test_weekly_time_attack_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard/weekly?mode=time_attack")
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)
+
+    def test_weekly_default_mode(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard/weekly")
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)
+
+    def test_weekly_limit_param(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard/weekly?mode=classic&limit=5")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+        assert len(data) <= 5
+
+
+# ---------- Iteration 3: Admin seed-players endpoint ----------
+class TestAdminSeedPlayers:
+    def test_seed_players_without_auth(self, api_client, base_url):
+        r = api_client.post(f"{base_url}/api/admin/seed-players")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_seed_players_with_invalid_bearer(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/admin/seed-players",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+
+# ---------- Iteration 3: Notifications (auth required) ----------
+class TestNotifications:
+    def test_notifications_list_without_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/notifications")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_notifications_list_invalid_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/notifications",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+    def test_notifications_unread_count_without_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/notifications/unread-count")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_notifications_unread_count_invalid_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/notifications/unread-count",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+
+    def test_notifications_read_all_without_auth(self, api_client, base_url):
+        r = api_client.post(f"{base_url}/api/notifications/read-all")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_notifications_read_all_invalid_bearer(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/notifications/read-all",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+
+
+# ---------- Iteration 3: Badges (auth required) ----------
+class TestBadges:
+    def test_me_badges_without_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/me/badges")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_me_badges_invalid_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/me/badges",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+
+# ---------- Iteration 3: Regression for iteration 1/2 endpoints ----------
+class TestRegression:
+    def test_api_root_still_works(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/")
+        assert r.status_code == 200
+        assert "Cak Mad Quiz" in r.json().get("message", "")
+
+    def test_leaderboard_classic_still_works(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard?mode=classic")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_players_list_still_works(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/players")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
 
 # ---------- Iteration 2: Players (public read + admin gated) ----------
 class TestPlayers:

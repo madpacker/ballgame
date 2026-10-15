@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as Haptics from "expo-haptics";
 
 import { colors, radius, spacing } from "@/src/theme";
+import { useSkin } from "@/src/contexts/skin";
 import { CATEGORY_LABEL, pickQuestions, type Category, type Question } from "@/src/data/quiz";
 import { pickDynamicQuestions } from "@/src/data/questions";
 import { useCountdown } from "@/src/hooks/useCountdown";
@@ -27,6 +28,7 @@ const POINT_PER_CORRECT = 100;
 export default function QuizScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { accent } = useSkin();
   const params = useLocalSearchParams<{ mode: Mode; category: CatKey }>();
   const mode = (params.mode ?? "classic") as Mode;
   const category = (params.category ?? "all") as CatKey;
@@ -164,7 +166,7 @@ export default function QuizScreen() {
             timerStyle,
             {
               backgroundColor:
-                mode === "time_attack" && timeLeft <= 10 ? colors.error : colors.brandPrimary,
+                mode === "time_attack" && timeLeft <= 10 ? colors.error : accent.primary,
             },
           ]}
         />
@@ -214,8 +216,8 @@ export default function QuizScreen() {
                   pressed && !revealed && { transform: [{ scale: 0.985 }] },
                 ]}
               >
-                <View style={styles.optLetter}>
-                  <Text style={styles.optLetterTxt}>{String.fromCharCode(65 + i)}</Text>
+                <View style={[styles.optLetter, { backgroundColor: accent.primary }]}>
+                  <Text style={[styles.optLetterTxt, { color: accent.onPrimary }]}>{String.fromCharCode(65 + i)}</Text>
                 </View>
                 <Text style={styles.optText}>{opt}</Text>
                 {revealed && isAnswer && (

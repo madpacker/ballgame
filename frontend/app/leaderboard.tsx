@@ -24,7 +24,7 @@ const MODES: { key: "classic" | "time_attack"; label: string }[] = [
   { key: "time_attack", label: "Time Attack" },
 ];
 
-type Scope = "global" | "friends";
+type Scope = "global" | "friends" | "weekly";
 
 export default function Leaderboard() {
   const insets = useSafeAreaInsets();
@@ -39,7 +39,11 @@ export default function Leaderboard() {
   useEffect(() => {
     setLoading(true);
     setErr(null);
-    api<Entry[]>(`/leaderboard?mode=${mode}&scope=${scope}&limit=50`)
+    const path =
+      scope === "weekly"
+        ? `/leaderboard/weekly?mode=${mode}&limit=50`
+        : `/leaderboard?mode=${mode}&scope=${scope}&limit=50`;
+    api<Entry[]>(path)
       .then(setEntries)
       .catch((e) => setErr(String(e)))
       .finally(() => setLoading(false));
@@ -55,7 +59,9 @@ export default function Leaderboard() {
           <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTag}>{scope === "global" ? "GLOBAL" : "TEMAN"}</Text>
+          <Text style={styles.headerTag}>
+            {scope === "global" ? "GLOBAL" : scope === "friends" ? "TEMAN" : "MINGGU INI"}
+          </Text>
           <Text style={styles.headerTitle}>LEADERBOARD</Text>
         </View>
         <Pressable
@@ -69,8 +75,10 @@ export default function Leaderboard() {
       </View>
 
       <View style={styles.scopeRow}>
-        {(["global", "friends"] as Scope[]).map((s) => {
+        {(["global", "friends", "weekly"] as Scope[]).map((s) => {
           const active = scope === s;
+          const label = s === "global" ? "Global" : s === "friends" ? "Teman" : "Mingguan";
+          const icon = s === "global" ? "earth" : s === "friends" ? "people" : "flame";
           return (
             <Pressable
               key={s}
@@ -79,13 +87,11 @@ export default function Leaderboard() {
               style={[styles.scopeBtn, active && styles.scopeBtnActive]}
             >
               <Ionicons
-                name={s === "global" ? "earth" : "people"}
-                size={16}
+                name={icon as any}
+                size={14}
                 color={active ? colors.onBrandPrimary : colors.muted}
               />
-              <Text style={[styles.scopeTxt, active && styles.scopeTxtActive]}>
-                {s === "global" ? "Global" : "Teman"}
-              </Text>
+              <Text style={[styles.scopeTxt, active && styles.scopeTxtActive]}>{label}</Text>
             </Pressable>
           );
         })}

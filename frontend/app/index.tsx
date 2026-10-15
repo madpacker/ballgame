@@ -9,18 +9,40 @@ import * as Haptics from "expo-haptics";
 
 import { colors, radius, spacing } from "@/src/theme";
 import { useAuth } from "@/src/contexts/auth";
+import { useSkin } from "@/src/contexts/skin";
 import { BACKGROUNDS } from "@/src/data/quiz";
 import { getLocalHigh, type LocalHigh } from "@/src/storage/localHigh";
+import { api } from "@/src/api";
 
 export default function Home() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
+  const { accent } = useSkin();
   const [high, setHigh] = useState<LocalHigh>({ classic: 0, time_attack: 0 });
+  const [unread, setUnread] = useState(0);
 
   useEffect(() => {
     getLocalHigh().then(setHigh);
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setUnread(0);
+      return;
+    }
+    let active = true;
+    const refresh = () =>
+      api<{ count: number }>("/notifications/unread-count")
+        .then((r) => active && setUnread(r.count))
+        .catch(() => {});
+    refresh();
+    const id = setInterval(refresh, 20000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [user]);
 
   const go = (mode: "classic" | "time_attack") => {
     if (Platform.OS !== "web") Haptics.selectionAsync();
@@ -37,26 +59,43 @@ export default function Home() {
         />
         <View style={styles.topBar}>
           <View style={styles.brandRow}>
-            <View style={styles.logoBadge}>
-              <Text style={styles.logoText}>CM</Text>
+            <View style={[styles.logoBadge, { backgroundColor: accent.primary }]}>
+              <Text style={[styles.logoText, { color: accent.onPrimary }]}>CM</Text>
             </View>
             <View>
               <Text style={styles.brandTitle}>CAK MAD QUIZ</Text>
               <Text style={styles.brandSub}>Laskar Sape Kerap Fan Game</Text>
             </View>
           </View>
-          <Pressable
-            testID="profile-button"
-            onPress={() => router.push("/profile")}
-            style={styles.profileBtn}
-            hitSlop={10}
-          >
-            {user?.picture ? (
-              <Image source={user.picture} style={styles.avatar} />
-            ) : (
-              <Ionicons name="person-circle-outline" size={32} color={colors.onSurface} />
+          <View style={styles.topRight}>
+            {user && (
+              <Pressable
+                testID="notifications-button"
+                onPress={() => router.push("/notifications")}
+                hitSlop={10}
+                style={styles.bellBtn}
+              >
+                <Ionicons name="notifications" size={24} color={colors.onSurface} />
+                {unread > 0 && (
+                  <View style={styles.bellBadge}>
+                    <Text style={styles.bellBadgeTxt}>{unread > 9 ? "9+" : unread}</Text>
+                  </View>
+                )}
+              </Pressable>
             )}
-          </Pressable>
+            <Pressable
+              testID="profile-button"
+              onPress={() => router.push("/profile")}
+              style={styles.profileBtn}
+              hitSlop={10}
+            >
+              {user?.picture ? (
+                <Image source={user.picture} style={styles.avatar} />
+              ) : (
+                <Ionicons name="person-circle-outline" size={32} color={colors.onSurface} />
+              )}
+            </Pressable>
+          </View>
         </View>
 
         <View style={styles.highCard}>
@@ -89,8 +128,8 @@ export default function Home() {
           onPress={() => go("classic")}
           style={({ pressed }) => [styles.modeCard, pressed && styles.cardPressed]}
         >
-          <View style={[styles.modeIcon, { backgroundColor: colors.brandPrimary }]}>
-            <Ionicons name="trophy" size={28} color={colors.onBrandPrimary} />
+          <View style={[styles.modeIcon, { backgroundColor: accent.primary }]}>
+            <Ionicons name="trophy" size={28} color={accent.onPrimary} />
           </View>
           <View style={styles.modeInfo}>
             <Text style={styles.modeTitle}>MODE CLASSIC</Text>
@@ -104,7 +143,7 @@ export default function Home() {
           onPress={() => go("time_attack")}
           style={({ pressed }) => [styles.modeCard, pressed && styles.cardPressed]}
         >
-          <View style={[styles.modeIcon, { backgroundColor: colors.brandSecondary }]}>
+          <View style={[styles.modeIcon, { backgroundColor: accent.secondary }]}>
             <Ionicons name="timer" size={28} color={colors.onBrandSecondary} />
           </View>
           <View style={styles.modeInfo}>
@@ -186,6 +225,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  topRight: { flexDirection: "row", alignItems: "center", gap: spacing.xs as number },
+  bellBtn: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bellBadge: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: colors.brandPrimary,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: colors.surface,
+  },
+  bellBadgeTxt: { color: colors.onBrandPrimary, fontSize: 10, fontWeight: "900" },
   avatar: { width: 36, height: 36, borderRadius: 18 },
   highCard: {
     backgroundColor: "rgba(28,31,38,0.85)",

@@ -5,6 +5,7 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { useState } from "react";
 
 import { colors, radius, spacing } from "@/src/theme";
+import { useSkin } from "@/src/contexts/skin";
 import { CATEGORY_DESC, CATEGORY_LABEL, type Category } from "@/src/data/quiz";
 
 type CatKey = Category | "all";
@@ -21,6 +22,7 @@ export default function CategoryScreen() {
   const router = useRouter();
   const { mode } = useLocalSearchParams<{ mode: "classic" | "time_attack" }>();
   const [selected, setSelected] = useState<CatKey>("all");
+  const { accent } = useSkin();
 
   const start = () => {
     router.replace({
@@ -82,10 +84,10 @@ export default function CategoryScreen() {
         <Pressable
           testID="start-match-button"
           onPress={start}
-          style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }]}
+          style={({ pressed }) => [styles.cta, { backgroundColor: accent.primary }, pressed && { opacity: 0.85 }]}
         >
-          <Text style={styles.ctaText}>MULAI PERTANDINGAN</Text>
-          <Ionicons name="play" size={20} color={colors.onBrandPrimary} />
+          <Text style={[styles.ctaText, { color: accent.onPrimary }]}>MULAI PERTANDINGAN</Text>
+          <Ionicons name="play" size={20} color={accent.onPrimary} />
         </Pressable>
       </View>
     </View>

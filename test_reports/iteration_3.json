@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 3 backend-only testing for Cak Mad Quiz API. Extended /app/backend/tests/test_cakmad_api.py with 22 new tests covering: Weekly leaderboard (public, classic + time_attack + default + limit shapes = list), Admin seed-players auth gating (401 missing_token / invalid_session), Notifications auth gating (GET /notifications, GET /notifications/unread-count, POST /notifications/read-all each 401 without / with invalid bearer), Badges auth gating (GET /me/badges 401 missing_token / invalid_session), regression on iteration 1/2 endpoints (GET /api/, GET /api/leaderboard?mode=classic, GET /api/players), and 5 new Mongo index assertions (notifications (user_id ASC, created_at DESC), notifications (user_id, read), scores (mode, week_key, score DESC), badges (user_id, created_at DESC), badges unique composite (user_id, week_key, mode, rank)). Final result: 60/60 PASSED against public URL https://ballgame-id.preview.emergentagent.com. All previous 38 tests still pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/leaderboard/weekly", "issue": "`mode` param is bare `str`, not Literal['classic','time_attack']. An unknown mode (e.g. ?mode=foo) silently returns [] instead of 422. Minor API hygiene — consider Literal to match ScoreSubmit.mode."},
+      {"endpoint": "GET /api/leaderboard/weekly", "issue": "Calls `_ensure_weekly_rollover()` on every weekly-leaderboard GET; while idempotent (early-returns when week_key matches), this is a public endpoint and under load each request performs a `app_settings.find_one`. Consider caching the current week_key in-process."},
+      {"endpoint": "POST /api/scores", "issue": "`_ensure_weekly_rollover()` is also triggered inside submit_score inside a try/except that swallows ALL exceptions silently (except Exception: pass). A real DB error during rollover would be invisible — at minimum log the exception."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_cakmad_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: tighten GET /api/leaderboard/weekly `mode` param to Literal['classic','time_attack'] for 422 on invalid values.",
+    "Optional: log swallowed exception from `_ensure_weekly_rollover()` inside submit_score instead of bare `except Exception: pass`.",
+    "Optional: in-process cache of current ISO week_key to avoid an `app_settings.find_one` per weekly leaderboard request.",
+    "Carried over: clean up `{\"deleted_at\": None} if False else {...}` dead branch in players_list (server.py); add Literal enum on ScoreSubmit.category; narrow CORS allow_origins for prod; add admin-promotion mechanism beyond first-signup."
+  ],
+  "critical_code_review_comments": [
+    "Weekly rollover race: `_ensure_weekly_rollover()` is not transactional. Two concurrent POST /scores at the exact moment of ISO-week change could each pass the `last_key == cur_key` check and both run the top-3 snapshot. The badges composite unique index (user_id, week_key, mode, rank) prevents duplicate badges, but concurrent `app_settings.update_one` is a last-write-wins. Low risk, but worth noting.",
+    "Weekly leaderboard aggregation is done in Python by iterating a sort-descending cursor and keeping the first-seen score per user_id. For a large week this reads the entire week's scores collection; prefer a `$group` aggregation (max score per user_id) with `$sort` + `$limit` server-side.",
+    "`_ensure_weekly_rollover` snapshots `last_key` scores by iterating ALL scores for the mode (`db.scores.find({'mode': mode, 'week_key': last_key}).sort('score', -1)`). This streams every entry even though only top-3 are needed — fine with the (mode, week_key, score DESC) index, but add `.limit(500)` or an aggregation `$group` + `$topK` to be safe.",
+    "push_notification stores `message` as a plain string; there is no i18n layer. The weekly-rollover badge messages are hard-coded Indonesian ('Juara 1 ... minggu YYYY-WNN'). Fine for current scope, but centralize translations if more locales are added.",
+    "NotificationOut model excludes `user_id` from the response via a dict comprehension in notifications_list — good, but inconsistent with pattern elsewhere (projection would be cleaner). Also the response_model would reject `user_id` anyway, but relying on that is fragile.",
+    "GET /api/notifications has no cursor/pagination — only `limit`. For heavy users this will grow unbounded; consider `before=<created_at>` cursor pagination.",
+    "`/api/leaderboard/weekly` is unauthenticated — any client can enumerate players + their current-week scores. Matches /api/leaderboard behavior (also public), but worth confirming this is intended for privacy."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_cakmad_api.py (extended with TestWeeklyLeaderboard (4 tests), TestAdminSeedPlayers (2), TestNotifications (6), TestBadges (2), TestRegression (3), and 5 new index tests in TestMongoIndexes)"
+  ],
+  "success_rate": {"backend": "100% (60/60)", "frontend": "not tested (backend-only run)"},
+  "seed_data_creation": "None. All iteration-3 tests only hit public endpoints or verify auth-gated endpoints return 401 — no documents written to Mongo. Index metadata is read-only.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "No valid Google session_id available. Authenticated flows (POST /api/admin/seed-players as admin, follow-triggered notification creation, submit_score → week_key tagging → weekly leaderboard with populated data, ISO-week rollover → badges insertion → /api/me/badges) cannot be end-to-end validated. The suite only verifies 401 boundaries + public endpoint shapes + Mongo indexes. For full coverage: obtain a valid session_id via the frontend redirect, POST /api/auth/session, then (1) POST /api/admin/seed-players (first user is auto-admin) → expect {ok:true, inserted:<=18, total:>=18}; call twice to assert idempotency (inserted==0 the 2nd time), (2) submit scores for two users and verify /api/leaderboard/weekly returns max score per user, (3) have user A follow user B, then as B GET /api/notifications → expect 'follow' kind entry, GET /api/notifications/unread-count → 1, POST /api/notifications/read-all → unread-count=0, (4) manually force rollover by updating app_settings.weekly.current_week_key to a prior week then POST /scores → verify badges doc appears and a 'badge' notification is created for top-3. Public URL: EXPO_PUBLIC_BACKEND_URL in /app/frontend/.env.",
+  "rca_of_issue": "N/A — no failures. All iteration-3 features behave per spec: weekly leaderboard returns [] or array as expected, all iteration-3 auth-gated endpoints (seed-players, notifications list/unread-count/read-all, me/badges) correctly return 401 with missing_token on no Authorization header and invalid_session on an invalid bearer token. All 5 iteration-3 Mongo indexes are present with correct direction/uniqueness: notifications(user_id↑, created_at↓), notifications(user_id↑, read↑), scores(mode↑, week_key↑, score↓), badges(user_id↑, created_at↓), and unique badges(user_id↑, week_key↑, mode↑, rank↑). Iteration 1 & 2 regression paths (GET /api/, GET /api/leaderboard?mode=classic, GET /api/players) still return 200 with list/dict shapes."
+}
