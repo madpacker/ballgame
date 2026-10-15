@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 2 backend-only testing for Cak Mad Quiz API. Extended /app/backend/tests/test_cakmad_api.py with 22 new tests covering Players (public list, admin create/patch/delete auth gating with multipart), Friends scope on leaderboard (unauth + malformed/invalid bearer returns [] not 401), Friends endpoints (list/follow/unfollow/search require 401 without auth), Files pass-through (404 for non-existent paths), and new Mongo indexes (users.username unique sparse, friendships (follower_id, following_id) unique, players.player_id unique). All iteration-1 regression tests still pass. Final result: 38/38 PASSED against public URL https://ballgame-id.preview.emergentagent.com.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/players", "issue": "Odd expression `{\"deleted_at\": None} if False else {\"deleted_at\": {\"$exists\": False}}` on line 427 — the `if False else` is dead code and misleading. Harmless but should be cleaned up to just `{\"deleted_at\": {\"$exists\": False}}`."},
+      {"endpoint": "PATCH /api/admin/players/{player_id}", "issue": "`included_in_quiz: bool` as a non-Form bare parameter in a POST/PATCH-style endpoint — FastAPI treats it as a query param. Works, but inconsistent with POST /admin/players which uses Form. Consider making it a JSON body or Query(...) explicitly for API clarity."},
+      {"endpoint": "GET /api/friends/search", "issue": "Query validator `min_length=2` is declared, but auth Depends is resolved before query validation, so q='a' returns 401 instead of 422. Not a bug, but documented in test_friends_search_q_min_length (accepts both)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_cakmad_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: clean up `{\"deleted_at\": None} if False else {...}` dead-code branch in players_list (server.py line 427).",
+    "Optional: tighten PATCH /api/admin/players/{player_id} parameter style — currently `included_in_quiz` is a query param; could be body or explicit Query(...).",
+    "Carried over from iter 1: add Literal enums on ScoreSubmit.category; narrow CORS allow_origins for production."
+  ],
+  "critical_code_review_comments": [
+    "Admin bootstrap: `is_admin` is granted to the first user to sign in via `count_documents({'is_admin': True}) == 0`. There is no admin-promotion endpoint — if the first-ever user is a test/throwaway account, promoting a different user requires a direct Mongo update. Consider a one-time env-based admin bootstrap (e.g., ADMIN_EMAILS allowlist on first exchange).",
+    "Object Storage init: `init_storage()` caches `storage_key` in a module global. On transient failure during startup it is logged but not retried; subsequent `put_object` calls will attempt re-init on each request (fine). Still, if INTEGRATION_PROXY_URL or EMERGENT_LLM_KEY is wrong, player photo uploads silently 500 — add a readiness check or surface this in /health.",
+    "File passthrough: GET /api/files/{full_path:path} proxies every request through the backend (no streaming). For large images this blocks a worker thread; use `httpx.AsyncClient.stream` instead of synchronous `requests` and consider edge caching headers (Cache-Control).",
+    "Friends scope leaderboard includes the current user's own id in the $in list (good), but it reuses the `scores` best_scores collection which already filters by mode — OK. However there is no pagination/skip beyond `limit`; cursor-based pagination would be better once data grows.",
+    "players_create: photo extension derived from filename only; no MIME sniffing. A client could upload an executable with a .jpg extension. Low risk since served via object storage, but worth noting.",
+    "username collision: `new_username()` has ~2.2B space (36^6) but no explicit retry on IntegrityError from the unique sparse index. Collision is astronomically unlikely but a try/except with regenerate would be defensive."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_cakmad_api.py (extended with TestPlayers, TestLeaderboardFriendsScope, TestFriends, TestFiles, and 3 new index tests in TestMongoIndexes)"
+  ],
+  "success_rate": {"backend": "100% (38/38)", "frontend": "not tested (backend-only run)"},
+  "seed_data_creation": "None. All iteration-2 tests only hit public endpoints or verify auth-gated endpoints return 401 — no documents written to Mongo. Index metadata is read-only.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "No valid Google session_id is available in this environment, so authenticated flows (admin photo upload, friend follow with real target, friends-scope leaderboard with populated friendships) cannot be end-to-end validated. The suite only verifies 401/404 boundaries and public read endpoints. For full flow coverage, a valid Emergent OAuth session_id must be obtained via the frontend redirect; then POST /api/auth/session → use session_token to: (1) seed a player via POST /api/admin/players multipart (first user is admin), (2) follow another seeded user via POST /api/friends/follow {code|email}, (3) submit scores and verify friends-scope leaderboard returns only self+followed. Public URL: EXPO_PUBLIC_BACKEND_URL in /app/frontend/.env. Mongo creds read from /app/backend/.env.",
+  "rca_of_issue": "N/A — no failures. All iteration-2 features behave per spec: Players public read + admin-gated writes, Friends auth-gated 401, Friends scope on leaderboard silently returns [] for unauth/invalid-bearer (per intent), Files passthrough 404 on missing objects, and all three new indexes (users.username unique+sparse, friendships composite unique, players.player_id unique) are present."
+}

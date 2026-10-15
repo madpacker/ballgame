@@ -24,11 +24,14 @@ const MODES: { key: "classic" | "time_attack"; label: string }[] = [
   { key: "time_attack", label: "Time Attack" },
 ];
 
+type Scope = "global" | "friends";
+
 export default function Leaderboard() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
   const [mode, setMode] = useState<"classic" | "time_attack">("classic");
+  const [scope, setScope] = useState<Scope>("global");
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -36,11 +39,11 @@ export default function Leaderboard() {
   useEffect(() => {
     setLoading(true);
     setErr(null);
-    api<Entry[]>(`/leaderboard?mode=${mode}&limit=50`)
+    api<Entry[]>(`/leaderboard?mode=${mode}&scope=${scope}&limit=50`)
       .then(setEntries)
       .catch((e) => setErr(String(e)))
       .finally(() => setLoading(false));
-  }, [mode]);
+  }, [mode, scope]);
 
   const podium = entries.slice(0, 3);
   const rest = entries.slice(3);
@@ -52,9 +55,40 @@ export default function Leaderboard() {
           <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTag}>GLOBAL</Text>
+          <Text style={styles.headerTag}>{scope === "global" ? "GLOBAL" : "TEMAN"}</Text>
           <Text style={styles.headerTitle}>LEADERBOARD</Text>
         </View>
+        <Pressable
+          testID="add-friend-link"
+          onPress={() => router.push("/friends")}
+          hitSlop={10}
+          style={styles.backBtn}
+        >
+          <Ionicons name="person-add" size={22} color={colors.onSurface} />
+        </Pressable>
+      </View>
+
+      <View style={styles.scopeRow}>
+        {(["global", "friends"] as Scope[]).map((s) => {
+          const active = scope === s;
+          return (
+            <Pressable
+              key={s}
+              testID={`scope-${s}`}
+              onPress={() => setScope(s)}
+              style={[styles.scopeBtn, active && styles.scopeBtnActive]}
+            >
+              <Ionicons
+                name={s === "global" ? "earth" : "people"}
+                size={16}
+                color={active ? colors.onBrandPrimary : colors.muted}
+              />
+              <Text style={[styles.scopeTxt, active && styles.scopeTxtActive]}>
+                {s === "global" ? "Global" : "Teman"}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
 
       <View style={styles.tabs}>
@@ -89,9 +123,25 @@ export default function Leaderboard() {
         )}
         {!loading && !err && entries.length === 0 && (
           <View style={styles.center}>
-            <Ionicons name="podium-outline" size={64} color={colors.muted} />
-            <Text style={styles.emptyTitle}>Belum ada pemain</Text>
-            <Text style={styles.muted}>Jadilah yang pertama memasang skor!</Text>
+            <Ionicons name={scope === "friends" ? "people-outline" : "podium-outline"} size={64} color={colors.muted} />
+            <Text style={styles.emptyTitle}>
+              {scope === "friends" ? "Belum ada teman" : "Belum ada pemain"}
+            </Text>
+            <Text style={styles.muted}>
+              {scope === "friends"
+                ? "Tambahkan teman via kode username untuk melihat skor mereka."
+                : "Jadilah yang pertama memasang skor!"}
+            </Text>
+            {scope === "friends" && user && (
+              <Pressable
+                testID="add-friend-empty-cta"
+                onPress={() => router.push("/friends")}
+                style={styles.emptyCta}
+              >
+                <Ionicons name="person-add" size={16} color={colors.onBrandPrimary} />
+                <Text style={styles.emptyCtaTxt}>TAMBAH TEMAN</Text>
+              </Pressable>
+            )}
           </View>
         )}
         {!loading && podium.length > 0 && (
@@ -181,6 +231,38 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: colors.brandPrimary },
   tabTxt: { color: colors.muted, fontWeight: "700", fontSize: 13 },
   tabTxtActive: { color: colors.onBrandPrimary },
+  scopeRow: {
+    flexDirection: "row",
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    gap: spacing.sm as number,
+  },
+  scopeBtn: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "transparent",
+  },
+  scopeBtnActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  scopeTxt: { color: colors.muted, fontWeight: "700", fontSize: 13 },
+  scopeTxtActive: { color: colors.onBrandPrimary },
+  emptyCta: {
+    marginTop: spacing.lg,
+    flexDirection: "row",
+    gap: spacing.sm as number,
+    backgroundColor: colors.brandPrimary,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.pill,
+    alignItems: "center",
+  },
+  emptyCtaTxt: { color: colors.onBrandPrimary, fontWeight: "900", fontSize: 13, letterSpacing: 1.5 },
   center: { alignItems: "center", padding: spacing.xxxl, gap: spacing.sm as number },
   emptyTitle: { color: colors.onSurface, fontSize: 16, fontWeight: "800", marginTop: spacing.md },
   muted: { color: colors.muted, fontSize: 13 },

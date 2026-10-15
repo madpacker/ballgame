@@ -1,9 +1,11 @@
-import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
+import { View, Text, Pressable, StyleSheet, ScrollView, Platform } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useEffect, useState } from "react";
+import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
 
 import { colors, radius, spacing } from "@/src/theme";
 import { useAuth } from "@/src/contexts/auth";
@@ -18,6 +20,12 @@ export default function Profile() {
   useEffect(() => {
     getLocalHigh().then(setHigh);
   }, []);
+
+  const copyCode = async () => {
+    if (!user) return;
+    await Clipboard.setStringAsync(user.username);
+    if (Platform.OS !== "web") Haptics.selectionAsync();
+  };
 
   return (
     <View style={styles.container}>
@@ -43,18 +51,40 @@ export default function Profile() {
           </View>
           <Text style={styles.name}>{user?.name ?? "Tamu"}</Text>
           <Text style={styles.email}>{user?.email ?? "Belum login"}</Text>
+          {user?.is_admin && (
+            <View style={styles.adminBadge}>
+              <Ionicons name="shield-checkmark" size={12} color={colors.onBrandSecondary} />
+              <Text style={styles.adminBadgeTxt}>ADMIN</Text>
+            </View>
+          )}
+          {user && (
+            <Pressable testID="copy-username-btn" onPress={copyCode} style={styles.codePill}>
+              <Text style={styles.codeTxt}>{user.username}</Text>
+              <Ionicons name="copy" size={14} color={colors.brandSecondary} />
+            </Pressable>
+          )}
         </View>
 
         <View style={styles.statGrid}>
           <View style={styles.stat}>
-            <Text style={styles.statLabel}>HIGH SCORE · CLASSIC</Text>
+            <Text style={styles.statLabel}>HIGH · CLASSIC</Text>
             <Text style={styles.statValue}>{high.classic}</Text>
           </View>
           <View style={styles.stat}>
-            <Text style={styles.statLabel}>HIGH SCORE · TIME ATTACK</Text>
+            <Text style={styles.statLabel}>HIGH · TIME ATTACK</Text>
             <Text style={styles.statValue}>{high.time_attack}</Text>
           </View>
         </View>
+
+        <Pressable
+          testID="friends-link"
+          onPress={() => router.push("/friends")}
+          style={styles.linkRow}
+        >
+          <Ionicons name="people" size={22} color={colors.brandSecondary} />
+          <Text style={styles.linkTxt}>Teman</Text>
+          <Ionicons name="chevron-forward" size={20} color={colors.muted} />
+        </Pressable>
 
         <Pressable
           testID="leaderboard-link"
@@ -62,9 +92,21 @@ export default function Profile() {
           style={styles.linkRow}
         >
           <Ionicons name="podium" size={22} color={colors.brandSecondary} />
-          <Text style={styles.linkTxt}>Lihat Leaderboard</Text>
+          <Text style={styles.linkTxt}>Leaderboard</Text>
           <Ionicons name="chevron-forward" size={20} color={colors.muted} />
         </Pressable>
+
+        {user?.is_admin && (
+          <Pressable
+            testID="admin-link"
+            onPress={() => router.push("/admin")}
+            style={styles.linkRow}
+          >
+            <Ionicons name="shield-checkmark" size={22} color={colors.brandSecondary} />
+            <Text style={styles.linkTxt}>Database Pemain (Admin)</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.muted} />
+          </Pressable>
+        )}
 
         {user ? (
           <Pressable testID="logout-button" onPress={signOut} style={styles.dangerBtn}>
@@ -117,6 +159,28 @@ const styles = StyleSheet.create({
   avatar: { width: 84, height: 84, borderRadius: 42 },
   name: { color: colors.onSurface, fontSize: 20, fontWeight: "900" },
   email: { color: colors.muted, fontSize: 13, marginTop: 4 },
+  adminBadge: {
+    flexDirection: "row",
+    gap: 4,
+    backgroundColor: colors.brandSecondary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    alignItems: "center",
+    marginTop: spacing.sm,
+  },
+  adminBadgeTxt: { color: colors.onBrandSecondary, fontWeight: "900", fontSize: 10, letterSpacing: 1.5 },
+  codePill: {
+    marginTop: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm as number,
+    backgroundColor: colors.brandTertiary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+  },
+  codeTxt: { color: colors.brandSecondary, fontWeight: "900", fontSize: 14, letterSpacing: 2 },
   statGrid: { flexDirection: "row", gap: spacing.md as number },
   stat: {
     flex: 1,

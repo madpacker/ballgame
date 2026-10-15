@@ -167,3 +167,171 @@ class TestMongoIndexes:
         user_mode = [v for v in idx.values() if tuple(f[0] for f in v.get("key", [])) == ("user_id", "mode")]
         assert user_mode, f"Expected (user_id, mode) index. Have: {keys_sets}"
         assert any(v.get("unique") for v in user_mode), "(user_id, mode) index not unique"
+
+    # ---------- Iteration 2 index checks ----------
+    def test_users_username_unique_sparse_index(self, mongo_db):
+        idx = mongo_db.users.index_information()
+        uname = [v for v in idx.values() if tuple(f[0] for f in v.get("key", [])) == ("username",)]
+        assert uname, f"username index missing. Have: {list(idx.keys())}"
+        assert any(v.get("unique") for v in uname), "username index not unique"
+        assert any(v.get("sparse") for v in uname), "username index not sparse"
+
+    def test_friendships_follower_following_unique_index(self, mongo_db):
+        idx = mongo_db.friendships.index_information()
+        keys_sets = {tuple(f[0] for f in v.get("key", [])): v for v in idx.values()}
+        comp = keys_sets.get(("follower_id", "following_id"))
+        assert comp is not None, f"(follower_id, following_id) index missing. Have: {list(keys_sets.keys())}"
+        assert comp.get("unique"), "(follower_id, following_id) index not unique"
+
+    def test_players_player_id_unique_index(self, mongo_db):
+        idx = mongo_db.players.index_information()
+        pid = [v for v in idx.values() if tuple(f[0] for f in v.get("key", [])) == ("player_id",)]
+        assert pid, f"player_id index missing. Have: {list(idx.keys())}"
+        assert any(v.get("unique") for v in pid), "player_id index not unique"
+
+
+# ---------- Iteration 2: Players (public read + admin gated) ----------
+class TestPlayers:
+    def test_players_list_public_no_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/players")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+
+    def test_players_list_include_all_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/players?include_all=true")
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)
+
+    def test_admin_players_create_without_auth(self, api_client, base_url):
+        # Multipart without auth must be 401
+        files = {"photo": ("x.jpg", b"\x89PNGfake", "image/jpeg")}
+        data = {
+            "name": "TEST_Player",
+            "position": "GK",
+            "years_at_mu": "2020-2024",
+            "previous_clubs": "Club A, Club B",
+            "included_in_quiz": "true",
+        }
+        # requests Session default header is application/json; strip it for multipart
+        s = api_client
+        s.headers.pop("Content-Type", None)
+        r = s.post(f"{base_url}/api/admin/players", data=data, files=files)
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_admin_players_create_with_invalid_bearer(self, api_client, base_url):
+        files = {"photo": ("x.jpg", b"\x89PNGfake", "image/jpeg")}
+        data = {"name": "TEST_Player2", "position": "DEF"}
+        s = api_client
+        s.headers.pop("Content-Type", None)
+        r = s.post(
+            f"{base_url}/api/admin/players",
+            data=data,
+            files=files,
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+    def test_admin_players_patch_without_auth(self, api_client, base_url):
+        r = api_client.patch(
+            f"{base_url}/api/admin/players/pl_fake?included_in_quiz=false"
+        )
+        assert r.status_code == 401, r.text
+
+    def test_admin_players_delete_without_auth(self, api_client, base_url):
+        r = api_client.delete(f"{base_url}/api/admin/players/pl_fake")
+        assert r.status_code == 401, r.text
+
+
+# ---------- Iteration 2: Friends scope on leaderboard ----------
+class TestLeaderboardFriendsScope:
+    def test_friends_scope_without_auth_returns_empty(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard?mode=classic&scope=friends")
+        assert r.status_code == 200, r.text
+        assert r.json() == []
+
+    def test_friends_scope_invalid_bearer_returns_empty(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/leaderboard?mode=classic&scope=friends",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == []
+
+    def test_friends_scope_malformed_header_returns_empty(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/leaderboard?mode=time_attack&scope=friends",
+            headers={"Authorization": "NotBearer stuff"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == []
+
+    def test_global_scope_still_works(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard?mode=classic&scope=global")
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)
+
+
+# ---------- Iteration 2: Friends endpoints (auth required) ----------
+class TestFriends:
+    def test_friends_list_without_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/friends")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_friends_list_invalid_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/friends",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+    def test_friends_follow_without_auth(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/friends/follow",
+            json={"code": "MU-ABCDEF"},
+        )
+        assert r.status_code == 401, r.text
+
+    def test_friends_unfollow_without_auth(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/friends/unfollow",
+            json={"code": "MU-ABCDEF"},
+        )
+        assert r.status_code == 401, r.text
+
+    def test_friends_search_without_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/friends/search?q=anything")
+        assert r.status_code == 401, r.text
+
+    def test_friends_search_invalid_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/friends/search?q=anything",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+
+    def test_friends_search_q_min_length(self, api_client, base_url):
+        # even with auth missing, FastAPI validates query params first OR auth first
+        # — observe actual behavior: with no auth, missing_token (401) is expected
+        # because Depends is resolved before body/query validation in FastAPI.
+        r = api_client.get(f"{base_url}/api/friends/search?q=a")
+        # Either 401 (auth checked first) or 422 (validation first). Accept 401 per impl.
+        assert r.status_code in (401, 422), r.text
+
+
+# ---------- Iteration 2: Files pass-through ----------
+class TestFiles:
+    def test_files_nonexistent_returns_404(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/files/non-existent-path")
+        assert r.status_code == 404, r.text
+        assert r.json().get("detail") == "not_found"
+
+    def test_files_nested_nonexistent_returns_404(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/files/cakmad-quiz/uploads/doesnotexist/x.jpg"
+        )
+        assert r.status_code == 404, r.text

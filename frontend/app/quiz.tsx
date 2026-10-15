@@ -14,6 +14,7 @@ import * as Haptics from "expo-haptics";
 
 import { colors, radius, spacing } from "@/src/theme";
 import { CATEGORY_LABEL, pickQuestions, type Category, type Question } from "@/src/data/quiz";
+import { pickDynamicQuestions } from "@/src/data/questions";
 import { useCountdown } from "@/src/hooks/useCountdown";
 
 type Mode = "classic" | "time_attack";
@@ -30,8 +31,10 @@ export default function QuizScreen() {
   const mode = (params.mode ?? "classic") as Mode;
   const category = (params.category ?? "all") as CatKey;
 
-  const initial = useMemo(() => pickQuestions(category, mode === "classic" ? CLASSIC_COUNT : 50), []);
-  const [queue, setQueue] = useState<Question[]>(initial);
+  const [queue, setQueue] = useState<Question[]>(() =>
+    pickQuestions(category, mode === "classic" ? CLASSIC_COUNT : 50),
+  );
+  const [loadingBank, setLoadingBank] = useState(true);
   const [index, setIndex] = useState(0);
   const [score, setScore] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
@@ -97,8 +100,11 @@ export default function QuizScreen() {
       } else {
         // Time attack: cycle through, reshuffle when empty
         if (index + 1 >= queue.length) {
-          setQueue(pickQuestions(category, 50));
-          setIndex(0);
+          pickDynamicQuestions(category, 50).then((q) => {
+            if (q.length > 0) setQueue(q);
+            else setQueue(pickQuestions(category, 50));
+            setIndex(0);
+          });
         } else {
           setIndex((v) => v + 1);
         }
@@ -116,9 +122,19 @@ export default function QuizScreen() {
   const flashStyle = useAnimatedStyle(() => ({ opacity: flashOpacity.value }));
 
   useEffect(() => {
+    let active = true;
+    pickDynamicQuestions(category, mode === "classic" ? CLASSIC_COUNT : 50).then((q) => {
+      if (active && q.length > 0) {
+        setQueue(q);
+        setIndex(0);
+      }
+      setLoadingBank(false);
+    });
     return () => {
+      active = false;
       finishedRef.current = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!current) return null;

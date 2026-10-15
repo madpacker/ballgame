@@ -58,4 +58,6 @@ export type User = {
   email: string;
   name: string;
   picture?: string | null;
+  username: string;
+  is_admin: boolean;
 };
