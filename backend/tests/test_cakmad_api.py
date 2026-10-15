@@ -493,3 +493,137 @@ class TestFiles:
             f"{base_url}/api/files/cakmad-quiz/uploads/doesnotexist/x.jpg"
         )
         assert r.status_code == 404, r.text
+
+
+
+# ---------- Iteration 4: Weekly theme (public, no auth) ----------
+class TestWeeklyTheme:
+    EXPECTED_KEYS = {"week_key", "id", "title", "subtitle", "filter_type", "filter_value", "accent"}
+
+    def test_weekly_theme_public_200(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/weekly-theme")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, dict)
+
+    def test_weekly_theme_has_all_keys(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/weekly-theme")
+        assert r.status_code == 200
+        data = r.json()
+        missing = self.EXPECTED_KEYS - set(data.keys())
+        assert not missing, f"Missing keys: {missing}. Got: {list(data.keys())}"
+
+    def test_weekly_theme_week_key_format(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/weekly-theme")
+        assert r.status_code == 200
+        wk = r.json()["week_key"]
+        # 'YYYY-Wnn'
+        assert isinstance(wk, str) and "-W" in wk, f"bad week_key: {wk}"
+        y, w = wk.split("-W")
+        assert y.isdigit() and len(y) == 4
+        assert w.isdigit() and 1 <= int(w) <= 53
+
+    def test_weekly_theme_deterministic(self, api_client, base_url):
+        r1 = api_client.get(f"{base_url}/api/weekly-theme").json()
+        r2 = api_client.get(f"{base_url}/api/weekly-theme").json()
+        assert r1 == r2, "Weekly theme must be deterministic for the same week"
+
+    def test_weekly_theme_values_sane(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/weekly-theme").json()
+        assert isinstance(r["id"], str) and r["id"]
+        assert isinstance(r["title"], str) and r["title"]
+        assert isinstance(r["subtitle"], str)
+        assert isinstance(r["filter_type"], str) and r["filter_type"]
+        # filter_value can be list or bool depending on theme
+        assert isinstance(r["filter_value"], (list, bool))
+        assert isinstance(r["accent"], str) and r["accent"].startswith("#")
+
+
+# ---------- Iteration 4: Streak (auth required) ----------
+class TestStreak:
+    def test_streak_without_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/me/streak")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_streak_with_invalid_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/me/streak",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+    def test_streak_malformed_header(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/me/streak",
+            headers={"Authorization": "NotBearer sometoken"},
+        )
+        assert r.status_code == 401, r.text
+
+
+# ---------- Iteration 4: Skins (auth required) ----------
+class TestSkins:
+    def test_skins_without_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/me/skins")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_skins_with_invalid_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/me/skins",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+    def test_skins_malformed_header(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/me/skins",
+            headers={"Authorization": "NotBearer sometoken"},
+        )
+        assert r.status_code == 401, r.text
+
+
+# ---------- Iteration 4: UserOut regression — /auth/me must still 401 (not 500) ----------
+class TestAuthMeRegressionIter4:
+    def test_auth_me_without_bearer_still_401(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/auth/me")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_auth_me_invalid_bearer_still_401(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/auth/me",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+
+# ---------- Iteration 4: Regression on earlier endpoints ----------
+class TestRegressionIter4:
+    def test_api_root(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/")
+        assert r.status_code == 200
+        assert "Cak Mad Quiz" in r.json().get("message", "")
+
+    def test_leaderboard_classic(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard?mode=classic")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_leaderboard_weekly_classic(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard/weekly?mode=classic")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_players_list_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/players")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_notifications_requires_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/notifications")
+        assert r.status_code == 401
+        assert r.json().get("detail") == "missing_token"

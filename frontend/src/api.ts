@@ -60,4 +60,7 @@ export type User = {
   picture?: string | null;
   username: string;
   is_admin: boolean;
+  current_streak?: number;
+  best_streak?: number;
+  champion_until?: string | null;
 };

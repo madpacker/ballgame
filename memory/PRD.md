@@ -1,41 +1,39 @@
 # Cak Mad Quiz — PRD
 
 ## Purpose
-Mobile fan quiz game for Madura United (Liga 1 Indonesia). Players compete across quiz categories, follow each other, chase weekly badges, and personalize their quiz skin.
+Mobile fan quiz game for Madura United. Daily habit loop via streak, weekly loop via themed challenge + champion skin, social loop via friends & notifications.
 
 ## Modes
 - **Classic**: 10 soal, 100 poin per benar.
-- **Time Attack**: 60 detik, jawab sebanyak mungkin.
+- **Time Attack**: 60 detik.
 
 ## Categories
-- `guess`, `history`, `trivia`, `all` — Static bank + dynamic from admin-seeded players.
+`guess`, `history`, `trivia`, `all` — static bank + admin-seeded players + weekly-theme filter.
 
 ## Features
-- Dark theme Madura United (default red + gold).
-- **3 Jersey skins** (`home` merah, `away` putih, `third` emas) — picked in Profile; applies to Home logo, mode icons, Start CTA, quiz option letter, and progress bar.
-- Local high score per mode (AsyncStorage).
-- Global, Teman, dan **Mingguan** scope leaderboard.
-- Google login (Emergent managed), auto-generated `MU-XXXXXX` username + QR for sharing.
-- Friends system: follow by code/email, unfollow, friends-only leaderboard.
-- **In-app notifications**: muncul saat ada yang mem-follow + saat kamu juara 1/2/3 minggu lalu.
-- **Weekly badges**: top-3 per mode tiap ISO week otomatis diberi piagam 🥇🥈🥉 saat week rollover.
-- Admin screen: upload foto pemain (Emergent Object Storage), toggle include/exclude dari quiz, soft delete, dan tombol **Seed Demo** untuk mengisi 18 pemain MU asli (Beto, Odemwingie, Bayu Gatra, dll) sekaligus.
+- 4 Jersey skins: HOME · AWAY · THIRD · **CHAMPION 👑** (eksklusif untuk juara 1 mingguan, aktif 7 hari).
+- Local high score + global/teman/mingguan leaderboard scope.
+- Weekly top-3 badge 🥇🥈🥉 + top-1 mendapat skin CHAMPION.
+- **Daily streak** dengan bonus poin otomatis: +25 (streak 2), +75 (streak 3), +150 (streak 7+).
+- **Weekly themed challenge** di beranda: 8 tema berotasi (Era Rahmad Darmawan, Legenda Striker, Tembok Pertahanan, Legiun Brasil, Jebolan Liga Indonesia, Jenderal Lini Tengah, Skuad Runner-Up 2019, Bintang Asing).
+- Google login (Emergent), QR + kode `MU-XXXXXX`, follow via kode/email.
+- In-app notifications (follow + juara mingguan + unlock champion).
+- Admin screen: upload foto pemain + Seed Demo (18 pemain MU).
 - Share hasil skor via native Share API.
 
-## Backend (FastAPI + MongoDB)
-Routes prefixed `/api`.
-- **Auth**: `POST /auth/session`, `GET /auth/me`, `POST /auth/logout`
-- **Scores**: `POST /scores` (tags `week_key`, triggers rollover)
-- **Leaderboard**: `GET /leaderboard?mode=&scope=global|friends&limit=`, `GET /leaderboard/weekly?mode=&limit=`
-- **Friends**: `GET /friends`, `GET /friends/search?q=`, `POST /friends/follow`, `POST /friends/unfollow`
-- **Notifications**: `GET /notifications`, `GET /notifications/unread-count`, `POST /notifications/read-all`
-- **Badges**: `GET /me/badges`
-- **Players**: `GET /players`
-- **Admin**: `POST /admin/players`, `PATCH /admin/players/{id}`, `DELETE /admin/players/{id}`, `POST /admin/seed-players`
-- **Files**: `GET /files/{path}` (Emergent Object Storage pass-through)
-
-## Frontend (Expo Router)
-`/`, `/category`, `/quiz`, `/result`, `/leaderboard`, `/friends`, `/notifications`, `/admin`, `/profile`, `/login`.
+## Backend (FastAPI + MongoDB) — prefix `/api`
+- Auth: `POST /auth/session`, `GET /auth/me`, `POST /auth/logout`
+- Scores: `POST /scores` (updates streak, triggers rollover) → returns `{score, streak, streak_bonus, streak_milestone}`
+- Streak: `GET /me/streak`
+- Skins: `GET /me/skins`
+- Weekly Theme: `GET /weekly-theme`
+- Leaderboard: `GET /leaderboard?mode=&scope=global|friends`, `GET /leaderboard/weekly?mode=`
+- Friends: `GET /friends`, `GET /friends/search`, `POST /friends/follow`, `POST /friends/unfollow`
+- Notifications: `GET /notifications`, `GET /notifications/unread-count`, `POST /notifications/read-all`
+- Badges: `GET /me/badges`
+- Players: `GET /players`
+- Admin: `POST /admin/players`, `PATCH /admin/players/{id}`, `DELETE /admin/players/{id}`, `POST /admin/seed-players`
+- Files: `GET /files/{path}` (Emergent Object Storage)
 
 ## Testing
-Backend: **60/60 pytest green** (`/app/backend/tests/test_cakmad_api.py`).
+Backend: **78/78 pytest green** at `/app/backend/tests/test_cakmad_api.py`.

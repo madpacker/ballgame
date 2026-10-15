@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 4 backend-only testing for Cak Mad Quiz API. Extended /app/backend/tests/test_cakmad_api.py with 18 new tests covering: (1) Weekly theme — GET /api/weekly-theme is public (200), returns dict with all 7 expected keys {week_key,id,title,subtitle,filter_type,filter_value,accent}, week_key matches 'YYYY-Wnn', theme is deterministic across repeated calls (same week), and all field types/values look sane (filter_value is list or bool, accent is hex-like). (2) Streak — GET /api/me/streak requires auth: 401 missing_token without header, 401 invalid_session with bogus bearer, 401 with malformed Authorization. (3) Skins — GET /api/me/skins requires auth with the same three 401 boundaries. (4) UserOut regression — GET /api/auth/me without / with invalid bearer still returns 401 (not 500), confirming new UserOut fields (current_streak, best_streak, champion_until) with defaults did not break serialization. (5) Regression — GET /api/, /api/leaderboard?mode=classic, /api/leaderboard/weekly?mode=classic, /api/players (public 200/list) and /api/notifications (401) all intact. Final result: 78/78 PASSED against public URL from EXPO_PUBLIC_BACKEND_URL. All previous 60 iteration-1/2/3 tests still pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/weekly-theme", "issue": "Response is a flat dict mixing week_key with the theme payload. If a future theme adds a 'week_key' key it would silently collide. Consider nesting: {week_key, theme:{...}}."},
+      {"endpoint": "GET /api/weekly-theme", "issue": "No ETag/Cache-Control headers — theme is deterministic per ISO week so a 7-day Cache-Control (public, max-age=... with next-week boundary) would reduce load on this public endpoint."},
+      {"endpoint": "POST /api/scores (streak)", "issue": "Streak bonus logic computes streak_milestone only for 3 and 7 but NOT for 2 (streak_bonus=25 is still returned, which is correct per spec). Spec says: '+25 bonus at streak 2, +75 at 3, +150 at 7'. Confirm whether streak_milestone should also be 2 at streak=2 — currently it stays None at streak=2 (server.py line ~339). Minor: inconsistent payload shape (milestone None but bonus>0)."},
+      {"endpoint": "POST /api/scores (streak)", "issue": "Streak reset rule: `last_date == today - timedelta(days=1)` → +1, else `current = 1` (reset). But `last_play_date` is stored as midnight UTC via datetime.combine(today, min.time(), tzinfo=UTC). Users in UTC+7..+12 could see 'yesterday' flip at a surprising local-time boundary. Document the UTC-day definition in /me/streak."},
+      {"endpoint": "GET /api/me/skins", "issue": "`champion.until` is only populated when champ_active is True; when locked it is null. Frontend code must handle both (ok but worth documenting). Also champion_until expiry is only lazily cleared on read in to_user_out / my_skins — DB value remains stale (not a bug, cosmetic)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_cakmad_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: expose streak_milestone=2 at streak==2 for consistency with +25 bonus, OR document that only 3 and 7 are milestone events.",
+    "Optional: nest weekly-theme payload as {week_key, theme:{...}} to avoid key collisions and ease frontend typing.",
+    "Optional: add Cache-Control: public, max-age=<seconds-until-next-ISO-week> on /api/weekly-theme.",
+    "Optional: lazy-clear expired champion_until on read: in to_user_out()/my_skins(), when champ expires, also $unset in DB to keep collection clean.",
+    "Carried over from prior iterations: clean up `{'deleted_at': None} if False else {...}` dead branch in players_list, Literal enum on ScoreSubmit.category, narrow CORS allow_origins in prod, admin-promotion mechanism beyond first-signup, add $group aggregation in weekly leaderboard."
+  ],
+  "critical_code_review_comments": [
+    "Rank-1 champion skin is only awarded inside _ensure_weekly_rollover(), which runs on first POST /scores or GET /leaderboard/weekly of the new ISO week. If no user plays or views that endpoint for an entire week after the week turns over, champion_until for last week's rank-1 is never set. Consider a background cron or set champion_until on badge-insert directly (which the code already does) — but note it depends on someone triggering the request.",
+    "to_user_out() clears champion_until when expired, but the stored DB field remains in the past. Low cost, but on export/ETL this looks confusing. Prefer $unset on expiry read, or TTL index on champion_until.",
+    "Streak check uses `prev_current = current` but then overwrites `current` before writing `best`. `best` here is reused as both the pre-existing best int AND later shadowed by `best = await db.best_scores.find_one(...)` at line ~362 (same variable name). This is a readability issue — rename the dict to `best_doc`.",
+    "/api/me/streak returns last_play_date formatted via .isoformat() if datetime else None — good, but the field uses the raw day-start timestamp with UTC tz. Frontend should treat it as a DATE, not a wall-clock timestamp, to avoid 'yesterday' confusion in local TZ.",
+    "GET /api/weekly-theme has no `response_model` — adding a Pydantic ThemeOut would catch future shape drift and feed OpenAPI schema.",
+    "pick_theme_for_week falls back to wk=0 on parse errors, which silently maps to the first theme. Would be preferable to raise an internal error or log a warning (fine as a UX fallback though)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_cakmad_api.py (extended with TestWeeklyTheme (5 tests), TestStreak (3), TestSkins (3), TestAuthMeRegressionIter4 (2), TestRegressionIter4 (5))"
+  ],
+  "success_rate": {"backend": "100% (78/78)", "frontend": "not tested (backend-only run per request)"},
+  "seed_data_creation": "None. All iteration-4 tests hit public endpoints or verify auth-gated endpoints return 401 — no documents written to Mongo.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "No valid Google session_id available, so authenticated streak/champion flows cannot be end-to-end validated. Suite only verifies 401 boundaries + weekly-theme public shape + regression. For full coverage with a session_id: (1) GET /api/me/streak as a fresh user → expect {current_streak:0, best_streak:0, last_play_date:null}; POST /api/scores (any mode) → expect response {ok:true, score, streak:1, streak_bonus:0, streak_milestone:null}; same user POST /scores again same day → streak stays 1, streak_bonus 0 (no re-award); simulate next-day by manually $setting users.last_play_date to yesterday then POST /scores → streak 2, bonus 25, milestone null; repeat to 3 → bonus 75 milestone 3; to 7 → bonus 150 milestone 7; gap > 1 day → streak reset to 1. (2) GET /api/me/skins fresh user → {home:{locked:false},away:{locked:false},third:{locked:false},champion:{locked:true,until:null}}; after setting users.champion_until to now+1h → champion.locked=false, until=iso. (3) GET /api/weekly-theme is already verified public & deterministic; to validate rotation, patch _week_key or mock to iterate through 8 theme ids (manual DB-free verification: 2026-W01→themes[1%8]='legend-strikers', W02→themes[2]='defense-wall', ...). Public URL: EXPO_PUBLIC_BACKEND_URL in /app/frontend/.env.",
+  "rca_of_issue": "N/A — no failures. All iteration-4 features behave per spec: GET /api/weekly-theme returns 200 publicly with all 7 required keys and deterministic payload (ISO week_key 'YYYY-Wnn' + theme fields from themes.py). GET /api/me/streak and GET /api/me/skins both correctly return 401 missing_token on absent header, 401 invalid_session on bogus bearer, 401 on malformed Authorization. GET /api/auth/me still returns 401 (not 500) with the expanded UserOut model containing current_streak/best_streak/champion_until — Pydantic defaults (0,0,None) prevent serialization failure for pre-existing user docs. Full regression on earlier endpoints (/api/, /api/leaderboard, /api/leaderboard/weekly, /api/players, /api/notifications) continues to pass."
+}

@@ -11,7 +11,54 @@ export type ApiPlayer = {
   included_in_quiz: boolean;
 };
 
+export type ThemeFilter = {
+  id: string;
+  filter_type: string;
+  filter_value: any;
+};
+
 const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;
+
+const INDONESIAN_CLUBS = [
+  "Persija",
+  "Arema",
+  "Persipura",
+  "Sriwijaya",
+  "Mitra Kukar",
+  "Barito",
+  "Persija Jakarta",
+  "Persebaya Surabaya",
+  "Semen Padang",
+  "Bhayangkara",
+  "Persegres",
+  "Deltras",
+  "Persisam",
+  "Persijap",
+];
+
+function filterPlayersByTheme(players: ApiPlayer[], theme: ThemeFilter | null): ApiPlayer[] {
+  if (!theme) return players;
+  const { filter_type, filter_value } = theme;
+  if (filter_type === "position") {
+    return players.filter((p) => Array.isArray(filter_value) && filter_value.includes(p.position));
+  }
+  if (filter_type === "years_contains") {
+    const years = Array.isArray(filter_value) ? filter_value : [filter_value];
+    return players.filter((p) =>
+      !!p.years_at_mu && years.some((y: string) => (p.years_at_mu ?? "").includes(y)),
+    );
+  }
+  if (filter_type === "previous_club_contains") {
+    const needles = (Array.isArray(filter_value) ? filter_value : [filter_value]).map((s: string) => s.toLowerCase());
+    return players.filter((p) =>
+      p.previous_clubs.some((c) => needles.some((n: string) => c.toLowerCase().includes(n))),
+    );
+  }
+  if (filter_type === "foreign") {
+    return players.filter((p) => !p.previous_clubs.some((c) => INDONESIAN_CLUBS.some((ic) => c.includes(ic))));
+  }
+  return players;
+}
 
 export function absolutePhotoUrl(url?: string | null) {
   if (!url) return undefined;
@@ -81,14 +128,20 @@ export async function fetchDynamicPlayers(): Promise<ApiPlayer[]> {
 export async function pickDynamicQuestions(
   cat: Category | "all",
   count: number,
+  theme?: ThemeFilter | null,
 ): Promise<Question[]> {
   const players = await fetchDynamicPlayers();
-  const dyn = playersToQuestions(players);
-  // Merge with static pool
+  const filtered = filterPlayersByTheme(players, theme ?? null);
+  const dyn = playersToQuestions(filtered);
   const staticAll = pickStatic("all", 999);
-  const pool =
-    cat === "all"
+  // When a theme is active, restrict to dynamic (themed) pool and skip static.
+  const pool = theme
+    ? cat === "all"
+      ? dyn
+      : dyn.filter((q) => q.category === cat)
+    : cat === "all"
       ? [...dyn, ...staticAll]
       : [...dyn.filter((q) => q.category === cat), ...staticAll.filter((q) => q.category === cat)];
-  return shuffle(pool).slice(0, Math.min(count, pool.length));
+  const final = pool.length > 0 ? pool : staticAll; // fallback if theme filter empties pool
+  return shuffle(final).slice(0, Math.min(count, final.length));
 }

@@ -2,11 +2,12 @@ import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { colors, radius, spacing } from "@/src/theme";
 import { useSkin } from "@/src/contexts/skin";
 import { CATEGORY_DESC, CATEGORY_LABEL, type Category } from "@/src/data/quiz";
+import { api } from "@/src/api";
 
 type CatKey = Category | "all";
 
@@ -20,14 +21,28 @@ const CATS: { key: CatKey; icon: any; color: string }[] = [
 export default function CategoryScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { mode } = useLocalSearchParams<{ mode: "classic" | "time_attack" }>();
+  const { mode, theme: themeId } = useLocalSearchParams<{ mode: "classic" | "time_attack"; theme?: string }>();
   const [selected, setSelected] = useState<CatKey>("all");
   const { accent } = useSkin();
+  const [theme, setTheme] = useState<{ title: string; subtitle: string; accent: string } | null>(null);
+
+  useEffect(() => {
+    if (!themeId) return;
+    api<{ title: string; subtitle: string; accent: string; id: string }>("/weekly-theme")
+      .then((r) => {
+        if (r.id === themeId) setTheme({ title: r.title, subtitle: r.subtitle, accent: r.accent });
+      })
+      .catch(() => setTheme(null));
+  }, [themeId]);
 
   const start = () => {
     router.replace({
       pathname: "/quiz",
-      params: { mode: mode ?? "classic", category: selected },
+      params: {
+        mode: mode ?? "classic",
+        category: selected,
+        ...(themeId ? { theme: themeId } : {}),
+      },
     });
   };
 
@@ -49,6 +64,19 @@ export default function CategoryScreen() {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
+        {theme && (
+          <View style={[styles.themeBanner, { borderColor: theme.accent, backgroundColor: theme.accent + "22" }]}>
+            <View style={[styles.themeIcon, { backgroundColor: theme.accent }]}>
+              <Ionicons name="flame" size={20} color={colors.onBrandPrimary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.themeTag}>CHALLENGE MINGGU INI</Text>
+              <Text style={styles.themeTitle}>{theme.title}</Text>
+              <Text style={styles.themeSub}>{theme.subtitle}</Text>
+            </View>
+          </View>
+        )}
+
         <Text style={styles.sectionTitle}>PILIH KATEGORI</Text>
 
         <View style={styles.grid}>
@@ -106,7 +134,25 @@ const styles = StyleSheet.create({
   backBtn: { padding: spacing.xs },
   headerTag: { color: colors.muted, fontSize: 11, letterSpacing: 2, fontWeight: "700" },
   headerTitle: { color: colors.onSurface, fontSize: 18, fontWeight: "900", letterSpacing: 1 },
-  content: { padding: spacing.lg },
+  content: { padding: spacing.lg, gap: spacing.lg as number },
+  themeBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md as number,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+  },
+  themeIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  themeTag: { color: colors.muted, fontSize: 10, letterSpacing: 2, fontWeight: "800" },
+  themeTitle: { color: colors.onSurface, fontWeight: "900", fontSize: 15, marginTop: 2 },
+  themeSub: { color: colors.muted, fontSize: 12, marginTop: 2 },
   sectionTitle: {
     color: colors.muted,
     fontSize: 12,

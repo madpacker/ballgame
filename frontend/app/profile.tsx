@@ -25,7 +25,7 @@ export default function Profile() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, signOut } = useAuth();
-  const { skin, setSkin } = useSkin();
+  const { skin, setSkin, championUnlocked, championUntil } = useSkin();
   const [high, setHigh] = useState<LocalHigh>({ classic: 0, time_attack: 0 });
   const [badges, setBadges] = useState<Badge[]>([]);
 
@@ -113,23 +113,47 @@ export default function Profile() {
               {(Object.keys(SKINS) as SkinKey[]).map((k) => {
                 const s = SKINS[k];
                 const active = skin === k;
+                const locked = k === "champion" && !championUnlocked;
                 return (
                   <Pressable
                     key={k}
                     testID={`skin-${k}`}
-                    onPress={() => setSkin(k)}
-                    style={[styles.skinChip, active && styles.skinChipActive]}
+                    onPress={() => !locked && setSkin(k)}
+                    style={[
+                      styles.skinChip,
+                      active && styles.skinChipActive,
+                      locked && { opacity: 0.5 },
+                    ]}
                   >
                     <View style={[styles.skinSwatch, { backgroundColor: s.primary }]} />
-                    <Text style={styles.skinName}>{s.label.split(" · ")[0]}</Text>
-                    {active && (
+                    <Text style={styles.skinName}>{s.emoji ?? ""}{s.label.split(" · ")[0]}</Text>
+                    {active && !locked && (
                       <Ionicons name="checkmark-circle" size={14} color={colors.brandSecondary} />
+                    )}
+                    {locked && (
+                      <Ionicons name="lock-closed" size={12} color={colors.muted} />
                     )}
                   </Pressable>
                 );
               })}
             </View>
-            <Text style={styles.skinHint}>{SKINS[skin].description}</Text>
+            <Text style={styles.skinHint}>
+              {SKINS[skin].description}
+              {championUnlocked && championUntil && skin !== "champion" ? ` · Skin CHAMPION masih aktif sampai ${new Date(championUntil).toLocaleDateString("id-ID")}` : ""}
+              {!championUnlocked ? " · Menangkan leaderboard mingguan untuk membuka skin CHAMPION 👑" : ""}
+            </Text>
+          </View>
+        )}
+
+        {user && (user.current_streak ?? 0) > 0 && (
+          <View style={styles.streakCard}>
+            <Text style={{ fontSize: 24 }}>🔥</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.skinLabel}>STREAK HARIAN</Text>
+              <Text style={styles.streakVal}>
+                {user.current_streak} hari · rekor {user.best_streak ?? 0}
+              </Text>
+            </View>
           </View>
         )}
 
@@ -299,6 +323,17 @@ const styles = StyleSheet.create({
   badgeMode: { color: colors.onBrandTertiary, fontSize: 10, fontWeight: "800", marginTop: 2 },
   badgeWeek: { color: colors.muted, fontSize: 9, marginTop: 2 },
   badgeScore: { color: colors.brandSecondary, fontWeight: "900", fontSize: 14, marginTop: 2 },
+  streakCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md as number,
+    padding: spacing.lg,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  streakVal: { color: colors.onSurface, fontWeight: "900", fontSize: 15, marginTop: 2 },
   statGrid: { flexDirection: "row", gap: spacing.md as number },
   stat: {
     flex: 1,

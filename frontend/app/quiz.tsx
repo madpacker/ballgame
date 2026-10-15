@@ -9,14 +9,15 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Haptics from "expo-haptics";
 
 import { colors, radius, spacing } from "@/src/theme";
 import { useSkin } from "@/src/contexts/skin";
 import { CATEGORY_LABEL, pickQuestions, type Category, type Question } from "@/src/data/quiz";
-import { pickDynamicQuestions } from "@/src/data/questions";
+import { pickDynamicQuestions, type ThemeFilter } from "@/src/data/questions";
 import { useCountdown } from "@/src/hooks/useCountdown";
+import { api } from "@/src/api";
 
 type Mode = "classic" | "time_attack";
 type CatKey = Category | "all";
@@ -29,9 +30,10 @@ export default function QuizScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { accent } = useSkin();
-  const params = useLocalSearchParams<{ mode: Mode; category: CatKey }>();
+  const params = useLocalSearchParams<{ mode: Mode; category: CatKey; theme?: string }>();
   const mode = (params.mode ?? "classic") as Mode;
   const category = (params.category ?? "all") as CatKey;
+  const themeId = params.theme;
 
   const [queue, setQueue] = useState<Question[]>(() =>
     pickQuestions(category, mode === "classic" ? CLASSIC_COUNT : 50),
@@ -125,13 +127,21 @@ export default function QuizScreen() {
 
   useEffect(() => {
     let active = true;
-    pickDynamicQuestions(category, mode === "classic" ? CLASSIC_COUNT : 50).then((q) => {
+    (async () => {
+      let themeFilter: ThemeFilter | null = null;
+      if (themeId) {
+        try {
+          const t = await api<{ id: string; filter_type: string; filter_value: any }>("/weekly-theme");
+          if (t.id === themeId) themeFilter = { id: t.id, filter_type: t.filter_type, filter_value: t.filter_value };
+        } catch {}
+      }
+      const q = await pickDynamicQuestions(category, mode === "classic" ? CLASSIC_COUNT : 50, themeFilter);
       if (active && q.length > 0) {
         setQueue(q);
         setIndex(0);
       }
       setLoadingBank(false);
-    });
+    })();
     return () => {
       active = false;
       finishedRef.current = true;

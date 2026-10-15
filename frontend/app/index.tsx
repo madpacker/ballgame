@@ -7,12 +7,12 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { useEffect, useState } from "react";
 import * as Haptics from "expo-haptics";
 
+import { api } from "@/src/api";
 import { colors, radius, spacing } from "@/src/theme";
 import { useAuth } from "@/src/contexts/auth";
 import { useSkin } from "@/src/contexts/skin";
 import { BACKGROUNDS } from "@/src/data/quiz";
 import { getLocalHigh, type LocalHigh } from "@/src/storage/localHigh";
-import { api } from "@/src/api";
 
 export default function Home() {
   const insets = useSafeAreaInsets();
@@ -21,9 +21,13 @@ export default function Home() {
   const { accent } = useSkin();
   const [high, setHigh] = useState<LocalHigh>({ classic: 0, time_attack: 0 });
   const [unread, setUnread] = useState(0);
+  const [theme, setTheme] = useState<{ title: string; subtitle: string; accent: string; id: string } | null>(null);
 
   useEffect(() => {
     getLocalHigh().then(setHigh);
+    api<{ title: string; subtitle: string; accent: string; id: string }>("/weekly-theme")
+      .then(setTheme)
+      .catch(() => setTheme(null));
   }, []);
 
   useEffect(() => {
@@ -122,6 +126,50 @@ export default function Home() {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.sectionTitle}>PILIH MODE PERTANDINGAN</Text>
+
+        {theme && (
+          <Pressable
+            testID="weekly-theme-banner"
+            onPress={() => router.push({ pathname: "/category", params: { mode: "classic", theme: theme.id } })}
+            style={({ pressed }) => [
+              styles.themeBanner,
+              { borderColor: theme.accent, backgroundColor: theme.accent + "22" },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <View style={[styles.themeIcon, { backgroundColor: theme.accent }]}>
+              <Ionicons name="flame" size={22} color={colors.onBrandPrimary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.themeTag}>CHALLENGE MINGGU INI</Text>
+              <Text style={styles.themeTitle}>{theme.title}</Text>
+              <Text style={styles.themeSub}>{theme.subtitle}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={22} color={colors.muted} />
+          </Pressable>
+        )}
+
+        {user && (user.current_streak ?? 0) > 0 && (
+          <View style={styles.streakCard}>
+            <View style={styles.streakIcon}>
+              <Text style={{ fontSize: 20 }}>🔥</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.streakLabel}>STREAK HARIAN</Text>
+              <Text style={styles.streakValue}>{user.current_streak} hari berturut</Text>
+            </View>
+            <View style={styles.streakRight}>
+              <Text style={styles.streakBest}>Rekor: {user.best_streak ?? 0}</Text>
+              {(user.current_streak ?? 0) >= 7 ? (
+                <Text style={styles.streakBonus}>+150 bonus</Text>
+              ) : (user.current_streak ?? 0) >= 3 ? (
+                <Text style={styles.streakBonus}>+75 bonus</Text>
+              ) : (user.current_streak ?? 0) >= 2 ? (
+                <Text style={styles.streakBonus}>+25 bonus</Text>
+              ) : null}
+            </View>
+          </View>
+        )}
 
         <Pressable
           testID="mode-classic-button"
@@ -248,6 +296,47 @@ const styles = StyleSheet.create({
   },
   bellBadgeTxt: { color: colors.onBrandPrimary, fontSize: 10, fontWeight: "900" },
   avatar: { width: 36, height: 36, borderRadius: 18 },
+  themeBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md as number,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+  },
+  themeIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  themeTag: { color: colors.muted, fontSize: 10, letterSpacing: 2, fontWeight: "800" },
+  themeTitle: { color: colors.onSurface, fontWeight: "900", fontSize: 16, letterSpacing: 0.5, marginTop: 2 },
+  themeSub: { color: colors.muted, fontSize: 12, marginTop: 2 },
+  streakCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md as number,
+    padding: spacing.md,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  streakIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.brandTertiary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  streakLabel: { color: colors.muted, fontSize: 10, letterSpacing: 2, fontWeight: "800" },
+  streakValue: { color: colors.onSurface, fontWeight: "900", fontSize: 15, marginTop: 2 },
+  streakRight: { alignItems: "flex-end" },
+  streakBest: { color: colors.muted, fontSize: 11 },
+  streakBonus: { color: colors.brandSecondary, fontWeight: "900", fontSize: 12, marginTop: 2 },
   highCard: {
     backgroundColor: "rgba(28,31,38,0.85)",
     borderRadius: radius.lg,

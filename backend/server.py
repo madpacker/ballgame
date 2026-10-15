@@ -17,6 +17,7 @@ from typing import List, Optional, Literal
 from datetime import datetime, timezone, timedelta
 
 from seed_players import SEED_PLAYERS
+from themes import THEMES, pick_theme_for_week
 
 
 ROOT_DIR = Path(__file__).parent
@@ -89,6 +90,9 @@ class UserOut(BaseModel):
     picture: Optional[str] = None
     username: str
     is_admin: bool = False
+    current_streak: int = 0
+    best_streak: int = 0
+    champion_until: Optional[datetime] = None
 
 
 class SessionExchangeOut(BaseModel):
@@ -191,6 +195,11 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
 
 
 def to_user_out(u: dict) -> UserOut:
+    champ = u.get("champion_until")
+    if isinstance(champ, datetime) and champ.tzinfo is None:
+        champ = champ.replace(tzinfo=timezone.utc)
+    if champ and champ < datetime.now(timezone.utc):
+        champ = None
     return UserOut(
         user_id=u["user_id"],
         email=u["email"],
@@ -198,6 +207,9 @@ def to_user_out(u: dict) -> UserOut:
         picture=u.get("picture"),
         username=u["username"],
         is_admin=bool(u.get("is_admin", False)),
+        current_streak=int(u.get("current_streak", 0)),
+        best_streak=int(u.get("best_streak", 0)),
+        champion_until=champ,
     )
 
 
@@ -282,12 +294,59 @@ async def auth_logout(authorization: Optional[str] = Header(default=None)):
 @api_router.post("/scores")
 async def submit_score(body: ScoreSubmit, user: dict = Depends(get_current_user)):
     now = datetime.now(timezone.utc)
+    # ---- Streak update ----
+    today = now.date()
+    last_date_val = user.get("last_play_date")
+    last_date = None
+    if isinstance(last_date_val, datetime):
+        last_date = last_date_val.date()
+    elif isinstance(last_date_val, str):
+        try:
+            last_date = datetime.fromisoformat(last_date_val).date()
+        except Exception:
+            last_date = None
+    current = int(user.get("current_streak", 0) or 0)
+    best = int(user.get("best_streak", 0) or 0)
+    streak_bonus = 0
+    streak_milestone: Optional[int] = None
+    prev_current = current
+    if last_date == today:
+        pass  # already counted today
+    elif last_date == today - timedelta(days=1):
+        current += 1
+    else:
+        current = 1
+    if current > best:
+        best = current
+    if current != prev_current or last_date != today:
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {"$set": {
+                "current_streak": current,
+                "best_streak": best,
+                "last_play_date": datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
+            }},
+        )
+    # Streak bonus points (first submit of the day only)
+    if last_date != today:
+        if current >= 7:
+            streak_bonus = 150
+            streak_milestone = 7
+        elif current >= 3:
+            streak_bonus = 75
+            streak_milestone = 3
+        elif current >= 2:
+            streak_bonus = 25
+
+    final_score = int(body.score) + streak_bonus
     doc = {
         "entry_id": f"sc_{uuid.uuid4().hex[:12]}",
         "user_id": user["user_id"],
         "name": user["name"],
         "picture": user.get("picture"),
-        "score": int(body.score),
+        "score": final_score,
+        "base_score": int(body.score),
+        "streak_bonus": streak_bonus,
         "mode": body.mode,
         "category": body.category,
         "correct": int(body.correct),
@@ -296,11 +355,10 @@ async def submit_score(body: ScoreSubmit, user: dict = Depends(get_current_user)
         "created_at": now,
     }
     await db.scores.insert_one(doc)
-    # Trigger weekly rollover check lazily on each submit.
     try:
         await _ensure_weekly_rollover()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("rollover error: %s", e)
     best = await db.best_scores.find_one(
         {"user_id": user["user_id"], "mode": body.mode}, {"_id": 0}
     )
@@ -322,7 +380,7 @@ async def submit_score(body: ScoreSubmit, user: dict = Depends(get_current_user)
             },
             upsert=True,
         )
-    return {"ok": True, "score": doc["score"]}
+    return {"ok": True, "score": doc["score"], "streak": current, "streak_bonus": streak_bonus, "streak_milestone": streak_milestone}
 
 
 @api_router.get("/leaderboard", response_model=List[LeaderboardEntry])
@@ -655,13 +713,20 @@ async def _ensure_weekly_rollover():
                     },
                     upsert=True,
                 )
+                # Rank-1 champions get exclusive skin for 7 days.
+                if rank == 1:
+                    await db.users.update_one(
+                        {"user_id": s["user_id"]},
+                        {"$set": {"champion_until": datetime.now(timezone.utc) + timedelta(days=7)}},
+                    )
                 try:
                     label = {1: "🥇 Juara 1", 2: "🥈 Juara 2", 3: "🥉 Juara 3"}[rank]
                     mode_label = "Classic" if mode == "classic" else "Time Attack"
+                    extra = " · Skin CHAMPION aktif 7 hari!" if rank == 1 else ""
                     await push_notification(
                         s["user_id"],
                         "badge",
-                        f"{label} {mode_label} minggu {last_key}! Skor {s['score']}",
+                        f"{label} {mode_label} minggu {last_key}! Skor {s['score']}{extra}",
                     )
                 except Exception:
                     pass
@@ -707,6 +772,45 @@ async def my_badges(user: dict = Depends(get_current_user), limit: int = 30):
     async for b in cursor:
         results.append(BadgeOut(**{k: v for k, v in b.items() if k in BadgeOut.model_fields}))
     return results
+
+
+# ---------- Streak ----------
+@api_router.get("/me/streak")
+async def my_streak(user: dict = Depends(get_current_user)):
+    last = user.get("last_play_date")
+    if isinstance(last, datetime) and last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return {
+        "current_streak": int(user.get("current_streak", 0) or 0),
+        "best_streak": int(user.get("best_streak", 0) or 0),
+        "last_play_date": last.isoformat() if isinstance(last, datetime) else None,
+    }
+
+
+# ---------- Weekly Theme ----------
+@api_router.get("/weekly-theme")
+async def weekly_theme():
+    cur_key = _week_key(datetime.now(timezone.utc))
+    theme = pick_theme_for_week(cur_key)
+    return {"week_key": cur_key, **theme}
+
+
+# ---------- Available skins (base 3 + champion if active) ----------
+@api_router.get("/me/skins")
+async def my_skins(user: dict = Depends(get_current_user)):
+    champ = user.get("champion_until")
+    if isinstance(champ, datetime) and champ.tzinfo is None:
+        champ = champ.replace(tzinfo=timezone.utc)
+    champ_active = isinstance(champ, datetime) and champ > datetime.now(timezone.utc)
+    return {
+        "home": {"locked": False},
+        "away": {"locked": False},
+        "third": {"locked": False},
+        "champion": {
+            "locked": not champ_active,
+            "until": champ.isoformat() if (champ_active and isinstance(champ, datetime)) else None,
+        },
+    }
 
 
 app.include_router(api_router)

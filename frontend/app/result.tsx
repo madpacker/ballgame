@@ -32,11 +32,12 @@ export default function ResultScreen() {
   const category = params.category || "all";
   const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0;
 
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [personalHigh, setPersonalHigh] = useState(0);
   const [newRecord, setNewRecord] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [streakInfo, setStreakInfo] = useState<{ streak: number; bonus: number } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -53,11 +54,15 @@ export default function ResultScreen() {
   useEffect(() => {
     if (!user || submitted || submitting) return;
     setSubmitting(true);
-    api("/scores", {
+    api<{ ok: boolean; score: number; streak: number; streak_bonus: number }>("/scores", {
       method: "POST",
       body: JSON.stringify({ score, mode, category, correct, total }),
     })
-      .then(() => setSubmitted(true))
+      .then((r) => {
+        setSubmitted(true);
+        if (r.streak_bonus > 0) setStreakInfo({ streak: r.streak, bonus: r.streak_bonus });
+        refreshUser().catch(() => {});
+      })
       .catch(() => {})
       .finally(() => setSubmitting(false));
   }, [user]);
@@ -150,6 +155,16 @@ export default function ResultScreen() {
             <Ionicons name="chevron-forward" size={18} color={colors.muted} />
           </Pressable>
         )}
+
+        {streakInfo && (
+          <View style={styles.streakCard}>
+            <Text style={{ fontSize: 28 }}>🔥</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.streakTitle}>STREAK {streakInfo.streak} HARI</Text>
+              <Text style={styles.streakSub}>Bonus +{streakInfo.bonus} poin otomatis masuk!</Text>
+            </View>
+          </View>
+        )}
       </ScrollView>
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + spacing.md }]}>
@@ -234,6 +249,23 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   statusTxt: { flex: 1, color: colors.onSurface, fontSize: 13 },
+  streakCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md as number,
+    padding: spacing.md,
+    backgroundColor: colors.brandTertiary,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.brandSecondary,
+  },
+  streakTitle: {
+    color: colors.brandSecondary,
+    fontWeight: "900",
+    fontSize: 14,
+    letterSpacing: 2,
+  },
+  streakSub: { color: colors.onBrandTertiary, fontSize: 12, marginTop: 2 },
   footer: {
     position: "absolute",
     left: 0,

@@ -11,6 +11,7 @@ type AuthState = {
   user: User | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 };
 
 const Ctx = createContext<AuthState>({
@@ -18,6 +19,7 @@ const Ctx = createContext<AuthState>({
   user: null,
   signIn: async () => {},
   signOut: async () => {},
+  refreshUser: async () => {},
 });
 
 const EXCHANGED = new Set<string>();
@@ -138,7 +140,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   };
 
-  return <Ctx.Provider value={{ loading, user, signIn, signOut }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ loading, user, signIn, signOut, refreshUser: refreshFromToken }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth() {
