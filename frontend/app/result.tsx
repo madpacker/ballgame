@@ -110,12 +110,13 @@ export default function ResultScreen() {
         method: "POST",
         body: JSON.stringify({ score, mode, category }),
       });
-      const url = `${BACKEND}/challenge/${r.challenge_id}`;
-      setCreatedChallenge({ id: r.challenge_id, url });
-      const msg = `⚔️ Aku menantangmu di Cak Mad Quiz!\nKalahkan skorku ${score} (${mode === "classic" ? "Classic" : "Time Attack"}).\n${url}`;
+      const webUrl = `${BACKEND}/challenge/${r.challenge_id}`;
+      const deepLink = `cakmad://challenge/${r.challenge_id}`;
+      setCreatedChallenge({ id: r.challenge_id, url: webUrl });
+      const msg = `⚔️ Aku menantangmu di Cak Mad Quiz!\nKalahkan skorku ${score} (${mode === "classic" ? "Classic" : "Time Attack"}).\n\n📱 Punya app: ${deepLink}\n🌐 Belum punya: ${webUrl}`;
       if (Platform.OS === "web") {
         if ((navigator as any).share) {
-          await (navigator as any).share({ title: "Rematch Challenge", text: msg, url });
+          await (navigator as any).share({ title: "Rematch Challenge", text: msg, url: webUrl });
         } else {
           await Clipboard.setStringAsync(msg);
         }

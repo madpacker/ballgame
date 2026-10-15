@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 6 backend-only testing for Cak Mad Quiz /api/top-streaks (public widget). Extended /app/backend/tests/test_cakmad_api.py with 14 new tests across 3 classes: TestTopStreaks (8), TestTopStreaksIndex (1), TestRegressionIter6 (5). Validated: (1) GET /api/top-streaks returns 200 with a JSON list and is PUBLIC (no 401, bogus bearer ignored). (2) Default limit=5 is honored; ?limit=3 and ?limit=1 each cap the result length appropriately. (3) Every item has the full StreakLeader shape {user_id, name, username, current_streak, best_streak} and only users with current_streak > 0 are returned (verified against live data). (4) Results are sorted by current_streak descending. (5) Mongo index users.current_streak DESC exists (confirmed via index_information). (6) Regression: /api/, /api/weekly-theme, /api/challenges/non-existent (public 404), /api/notifications (401 missing_token), /api/leaderboard/weekly all still work. Final: 108/108 PASSED against EXPO_PUBLIC_BACKEND_URL (previous 94 + 14 new). Deep-link scheme change in app.json (frontend → cakmad) is frontend-only and was explicitly out of scope per the request.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/top-streaks", "issue": "limit query param has no bounds (negative or 0 → empty list, huge values → unbounded Mongo scan). Consider Pydantic Query(default=5, ge=1, le=100) to protect the DB."},
+      {"endpoint": "GET /api/top-streaks", "issue": "No tie-breaker in sort. When multiple users share the same current_streak, order is non-deterministic across requests. Consider a secondary sort key like best_streak desc or user_id asc."},
+      {"endpoint": "GET /api/top-streaks", "issue": "Response has no caching headers. This is a public widget likely polled frequently from the home screen; a short Cache-Control: public, max-age=30 would reduce DB load without harming UX (streaks change at most once/day/user)."},
+      {"endpoint": "GET /api/top-streaks", "issue": "Exposes username (friend code 'MU-XXXXXX') publicly. If the username is intentionally semi-secret for the follow-by-code flow, this leaks it to anyone. Confirm with product; if sensitive, omit from the public widget."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_cakmad_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: clamp /api/top-streaks limit with Query(default=5, ge=1, le=100).",
+    "Optional: add a stable tie-breaker in the Mongo sort ([('current_streak', -1), ('best_streak', -1), ('user_id', 1)]) and add best_streak to the compound index if it becomes the common sort.",
+    "Optional: add Cache-Control: public, max-age=30 (or ETag) to /api/top-streaks and /api/weekly-theme.",
+    "Confirm with product whether username should be exposed on the public top-streaks widget; if not, drop it from StreakLeader.",
+    "Deep-link scheme change (app.json scheme: 'cakmad') — verify with Expo Router that any hardcoded 'frontend://' URIs in the frontend code / docs / OAuth redirect URIs have been migrated to 'cakmad://'.",
+    "Carried over from iter 5: Pydantic Field(ge=0) on ChallengeCreate.score and ChallengeComplete.score; validate theme_id against THEMES catalog; dedupe challenge-beat notifications; widen challenge_id entropy; add GET /api/me/challenges listing to leverage the (from_user_id, created_at) index.",
+    "Carried over: split server.py (>940 lines) into routers (auth, scores, friends, players, notifications, challenges, streaks, themes); narrow CORS allow_origins in prod; champion_until $unset on expiry."
+  ],
+  "critical_code_review_comments": [
+    "StreakLeader route is defined BEFORE GET /api/challenges/{challenge_id} but AFTER challenges_create — ordering is fine because the paths don't collide, but keeping all /api/me/* and widget endpoints grouped would improve readability.",
+    "top_streaks reads current_streak with int(u.get('current_streak', 0) or 0) defensively — good, matches to_user_out pattern. However, best_streak uses the same pattern, which is fine, but there is zero validation that users with current_streak < 0 are filtered (query uses $gt: 0 so negatives are already excluded — OK).",
+    "The new index users.current_streak -1 is non-sparse. Most users will have current_streak=0; the query filter {current_streak: {$gt: 0}} will still use the index via range scan from the top. If the users collection grows large, consider a partial index: partialFilterExpression={'current_streak': {$gt: 0}}.",
+    "StreakLeader.picture is Optional but server.py line 876-885 does not propagate picture into the leader item — wait, it DOES: picture=u.get('picture'). OK, false alarm.",
+    "No test for ?limit=0 or ?limit=-1 (would currently return [] which is fine) or ?limit=very_large (would do a full-collection sort). Add Query(ge=1, le=100) and these edge cases become non-issues."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_cakmad_api.py (appended TestTopStreaks x8, TestTopStreaksIndex x1, TestRegressionIter6 x5 — 14 new tests)"
+  ],
+  "success_rate": {"backend": "100% (108/108)", "frontend": "not tested (backend-only run per request; deep-link scheme change is frontend-only and out of scope)"},
+  "seed_data_creation": "None. All iteration-6 tests hit the public /api/top-streaks endpoint, verify shape against existing user data, and introspect the users index. No documents written to Mongo.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "No valid Google session_id was available, so the end-to-end streak lifecycle was not re-exercised. To fully verify /api/top-streaks sort order with authenticated flow: (1) auth as users A, B, C via POST /api/auth/session with real session_ids. (2) POST /api/scores for A on day T-6..T (6 days streak), B on day T-2..T (3 days), C only today (1 day) — this requires time-travel or manipulating last_play_date directly in Mongo. (3) GET /api/top-streaks → expect [A(6), B(3), C(1)] in exactly that order. (4) GET /api/top-streaks?limit=2 → expect [A, B] only. (5) Verify a user whose streak just dropped to 0 (missed a day → next score resets to 1) is only re-included after their first play, and that users with current_streak=0 are never shown. (6) Load test with 100k users: EXPLAIN the query to confirm the (current_streak, -1) index is actually used (not COLLSCAN). Public URL: EXPO_PUBLIC_BACKEND_URL in /app/frontend/.env. Deep-link scheme is now 'cakmad://' per app.json — frontend testing agent should verify Expo Router linking still resolves correctly on native/web and that any OAuth / share links use the new scheme.",
+  "rca_of_issue": "N/A — no failures. The /api/top-streaks endpoint is correctly implemented as a public route (no Depends on get_current_user), returns a List[StreakLeader] filtered to current_streak > 0, sorted by current_streak descending, and bounded by the limit query (default 5). The supporting Mongo index db.users.create_index([('current_streak', -1)]) is created in the startup_indexes hook and verified via index_information(). Full regression on earlier endpoints continues to pass (api root, weekly-theme, challenges GET public 404, notifications 401 auth gate, weekly leaderboard public)."
+}

@@ -782,3 +782,134 @@ class TestRegressionIter5:
         r = api_client.get(f"{base_url}/api/notifications")
         assert r.status_code == 401
         assert r.json().get("detail") == "missing_token"
+
+
+
+# ---------- Iteration 6: Top Streaks (public widget) ----------
+class TestTopStreaks:
+    """GET /api/top-streaks — public, no auth."""
+
+    def test_top_streaks_public_200(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/top-streaks")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+
+    def test_top_streaks_no_auth_not_401(self, api_client, base_url):
+        # Must NOT require auth: no Authorization header, must not return 401.
+        r = api_client.get(f"{base_url}/api/top-streaks")
+        assert r.status_code != 401, f"Expected public but got 401. Body: {r.text}"
+        assert r.status_code == 200
+
+    def test_top_streaks_ignores_bogus_bearer(self, api_client, base_url):
+        # Even a bogus Authorization header should be ignored (no Depends).
+        r = api_client.get(
+            f"{base_url}/api/top-streaks",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)
+
+    def test_top_streaks_limit_param(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/top-streaks?limit=3")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+        assert len(data) <= 3
+
+    def test_top_streaks_limit_1(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/top-streaks?limit=1")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+        assert len(data) <= 1
+
+    def test_top_streaks_default_limit(self, api_client, base_url):
+        # Default is 5
+        r = api_client.get(f"{base_url}/api/top-streaks")
+        assert r.status_code == 200, r.text
+        assert len(r.json()) <= 5
+
+    def test_top_streaks_item_shape(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/top-streaks?limit=50")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+        expected_keys = {"user_id", "name", "username", "current_streak", "best_streak"}
+        for item in data:
+            missing = expected_keys - set(item.keys())
+            assert not missing, f"Missing keys in StreakLeader: {missing}. Item: {item}"
+            # Must only include users with current_streak > 0
+            assert isinstance(item["current_streak"], int)
+            assert item["current_streak"] > 0, (
+                f"Only users with current_streak>0 should be returned; got {item}"
+            )
+            assert isinstance(item["best_streak"], int)
+            assert isinstance(item["user_id"], str) and item["user_id"]
+            assert isinstance(item["name"], str)
+            assert isinstance(item["username"], str)
+
+    def test_top_streaks_sorted_desc(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/top-streaks?limit=50")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        streaks = [item["current_streak"] for item in data]
+        assert streaks == sorted(streaks, reverse=True), (
+            f"Results not sorted by current_streak desc: {streaks}"
+        )
+
+
+# ---------- Iteration 6: Mongo index for top-streaks ----------
+class TestTopStreaksIndex:
+    @pytest.fixture(scope="class")
+    def mongo_db(self):
+        url = os.environ.get("MONGO_URL") or "mongodb://localhost:27017"
+        name = os.environ.get("DB_NAME") or "test_database"
+        try:
+            from dotenv import dotenv_values
+            vals = dotenv_values("/app/backend/.env")
+            url = vals.get("MONGO_URL", url)
+            name = vals.get("DB_NAME", name)
+        except Exception:
+            pass
+        client = MongoClient(url)
+        yield client[name]
+        client.close()
+
+    def test_users_current_streak_desc_index(self, mongo_db):
+        idx = mongo_db.users.index_information()
+        keys_sets = {tuple(f for f in v.get("key", [])): v for v in idx.values()}
+        # Expect index on current_streak desc
+        comp = keys_sets.get((("current_streak", -1),))
+        assert comp is not None, (
+            f"(current_streak DESC) index missing. Have: {list(keys_sets.keys())}"
+        )
+
+
+# ---------- Iteration 6: Regression ----------
+class TestRegressionIter6:
+    def test_api_root(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/")
+        assert r.status_code == 200
+        assert "Cak Mad Quiz" in r.json().get("message", "")
+
+    def test_weekly_theme_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/weekly-theme")
+        assert r.status_code == 200
+        data = r.json()
+        assert "week_key" in data and "id" in data
+
+    def test_challenges_get_nonexistent_public_404(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/challenges/non-existent")
+        assert r.status_code == 404, r.text
+        assert r.json().get("detail") == "challenge_not_found"
+
+    def test_notifications_requires_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/notifications")
+        assert r.status_code == 401
+        assert r.json().get("detail") == "missing_token"
+
+    def test_leaderboard_weekly_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard/weekly")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)

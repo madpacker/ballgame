@@ -854,6 +854,38 @@ async def challenges_create(body: ChallengeCreate, user: dict = Depends(get_curr
     return ChallengeOut(**{k: v for k, v in doc.items() if k in ChallengeOut.model_fields})
 
 
+# ---------- Top Streaks (public widget) ----------
+class StreakLeader(BaseModel):
+    user_id: str
+    name: str
+    picture: Optional[str] = None
+    username: str
+    current_streak: int
+    best_streak: int
+
+
+@api_router.get("/top-streaks", response_model=List[StreakLeader])
+async def top_streaks(limit: int = 5):
+    cursor = (
+        db.users.find({"current_streak": {"$gt": 0}}, {"_id": 0})
+        .sort("current_streak", -1)
+        .limit(limit)
+    )
+    results: List[StreakLeader] = []
+    async for u in cursor:
+        results.append(
+            StreakLeader(
+                user_id=u["user_id"],
+                name=u["name"],
+                picture=u.get("picture"),
+                username=u.get("username", ""),
+                current_streak=int(u.get("current_streak", 0) or 0),
+                best_streak=int(u.get("best_streak", 0) or 0),
+            )
+        )
+    return results
+
+
 @api_router.get("/challenges/{challenge_id}", response_model=ChallengeOut)
 async def challenges_get(challenge_id: str):
     doc = await db.challenges.find_one({"challenge_id": challenge_id}, {"_id": 0})
@@ -926,6 +958,7 @@ async def startup_indexes():
         )
         await db.challenges.create_index("challenge_id", unique=True)
         await db.challenges.create_index([("from_user_id", 1), ("created_at", -1)])
+        await db.users.create_index([("current_streak", -1)])
     except Exception as e:
         logger.warning("index creation issue: %s", e)
 

@@ -22,12 +22,16 @@ export default function Home() {
   const [high, setHigh] = useState<LocalHigh>({ classic: 0, time_attack: 0 });
   const [unread, setUnread] = useState(0);
   const [theme, setTheme] = useState<{ title: string; subtitle: string; accent: string; id: string } | null>(null);
+  const [topStreaks, setTopStreaks] = useState<{ user_id: string; name: string; picture?: string | null; current_streak: number }[]>([]);
 
   useEffect(() => {
     getLocalHigh().then(setHigh);
     api<{ title: string; subtitle: string; accent: string; id: string }>("/weekly-theme")
       .then(setTheme)
       .catch(() => setTheme(null));
+    api<{ user_id: string; name: string; picture?: string | null; current_streak: number }[]>("/top-streaks?limit=5")
+      .then(setTopStreaks)
+      .catch(() => setTopStreaks([]));
   }, []);
 
   useEffect(() => {
@@ -227,6 +231,33 @@ export default function Home() {
             sejarah klub mereka, dan jawab trivia seputar Laskar Sape Kerap.
           </Text>
         </View>
+
+        {topStreaks.length > 0 && (
+          <View style={styles.streakBoardCard}>
+            <View style={styles.streakBoardHeader}>
+              <Text style={styles.streakBoardTitle}>🔥 JUARA STREAK HARI INI</Text>
+              <Text style={styles.streakBoardSub}>Siapa paling rajin main?</Text>
+            </View>
+            {topStreaks.slice(0, 5).map((u, i) => (
+              <View key={u.user_id} style={styles.streakRow}>
+                <Text style={[styles.streakRank, i === 0 && { color: colors.brandSecondary }]}>
+                  {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`}
+                </Text>
+                {u.picture ? (
+                  <Image source={u.picture} style={styles.streakAvatar} />
+                ) : (
+                  <View style={[styles.streakAvatar, styles.streakAvatarFallback]}>
+                    <Ionicons name="person" size={16} color={colors.onSurface} />
+                  </View>
+                )}
+                <Text numberOfLines={1} style={styles.streakName}>{u.name}</Text>
+                <View style={styles.streakDaysPill}>
+                  <Text style={styles.streakDaysTxt}>{u.current_streak}🔥</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -421,4 +452,34 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   infoBody: { color: colors.onBrandTertiary, fontSize: 13, lineHeight: 19 },
+  streakBoardCard: {
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.sm as number,
+  },
+  streakBoardHeader: { marginBottom: spacing.sm },
+  streakBoardTitle: { color: colors.onSurface, fontWeight: "900", fontSize: 14, letterSpacing: 1.5 },
+  streakBoardSub: { color: colors.muted, fontSize: 11, marginTop: 2 },
+  streakRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm as number,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.divider,
+  },
+  streakRank: { color: colors.muted, fontSize: 16, fontWeight: "900", width: 32 },
+  streakAvatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surfaceTertiary },
+  streakAvatarFallback: { alignItems: "center", justifyContent: "center" },
+  streakName: { flex: 1, color: colors.onSurface, fontSize: 13, fontWeight: "600" },
+  streakDaysPill: {
+    backgroundColor: colors.brandTertiary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+  },
+  streakDaysTxt: { color: colors.brandSecondary, fontWeight: "900", fontSize: 12 },
 });
