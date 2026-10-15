@@ -1,0 +1,179 @@
+{
+  "app_name": "Cak Mad Quiz",
+  "personality": "7 Dark-First Utility",
+  "personality_one_liner": "Energetic, premium, and bold football club quiz interface designed for fast scanning and high impact.",
+  "color": {
+    "surface": "#0F1115",
+    "onSurface": "#F8F9FA",
+    "surfaceSecondary": "#1C1F26",
+    "onSurfaceSecondary": "#E1E4E8",
+    "surfaceTertiary": "#282C34",
+    "onSurfaceTertiary": "#C4C9D0",
+    "surfaceInverse": "#FFFFFF",
+    "onSurfaceInverse": "#0F1115",
+    "brand": "#A6192E",
+    "brandPrimary": "#C8102E",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#D4AF37",
+    "onBrandSecondary": "#1A1A1A",
+    "brandTertiary": "#4A1521",
+    "onBrandTertiary": "#FFD3D9",
+    "success": "#2E7D32",
+    "onSuccess": "#FFFFFF",
+    "warning": "#F57C00",
+    "onWarning": "#1A1A1A",
+    "error": "#D32F2F",
+    "onError": "#FFFFFF",
+    "info": "#1976D2",
+    "onInfo": "#FFFFFF",
+    "border": "#2A2D35",
+    "borderStrong": "#444955",
+    "divider": "#1C1F26",
+    "muted": "#8A919E",
+    "onBrand": "#FFFFFF"
+  },
+  "typography": {
+    "displayFontFamily": "Bebas Neue",
+    "textFontFamily": "Manrope",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Tight, mechanical spacing for lists/stats, but large tappable areas for quiz options.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "0",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": "true",
+    "do's": [
+      "Use on bottom tabs to overlay stadium background",
+      "Use on sticky header over the hero background image"
+    ],
+    "dont's": [
+      "Don't use on quiz option cards to ensure clarity",
+      "Don't over-blur live scoreboard numbers"
+    ]
+  },
+  "haptics": {
+    "events": {
+      "select_quiz_category": "selection",
+      "tap_quiz_option": "light",
+      "answer_correct": "success",
+      "answer_wrong": "error",
+      "time_running_out": "warning",
+      "tab_press": "selection",
+      "share_score": "medium"
+    }
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Home",
+      "purpose": "Dashboard showing high score, profile stats, and prominent entry points to game modes.",
+      "states": {
+        "loading": "Centered spinner over stadium background.",
+        "empty": "No prior score state: 'Welcome to Cak Mad Quiz! Play your first match.'",
+        "error": "Failed to load profile data - retry button."
+      },
+      "layout": "Hero section with stadium background + gradient scrim. Top bar with player avatar and rank. Large card displaying 'Local High Score' in gold text. Below: Two prominent buttons for 'Classic Mode (10Q)' and 'Time Attack (60s)'."
+    },
+    {
+      "name": "Category Selector",
+      "purpose": "Allows users to choose between 'Guess Player', 'Player History', 'Club Trivia', or 'All Categories'.",
+      "states": {
+        "loading": "Skeleton categories",
+        "empty": "None",
+        "error": "Retry loading categories"
+      },
+      "layout": "Grid of large square cards, each featuring an icon and category name. Card selection is highlighted with brandPrimary borderStrong. 'Start Match' sticky bottom CTA."
+    },
+    {
+      "name": "Quiz Gameplay",
+      "purpose": "Active match screen showing the question, timer, and 4 selectable options.",
+      "states": {
+        "loading": "Fetching question...",
+        "empty": "None",
+        "error": "Question load error - retry"
+      },
+      "layout": "Top sticky bar with match progress (e.g., Q3/10) and visual timer bar (diminishing width). Large image area (if 'Guess Player' mode). 4 large blocky answer cards (surfaceSecondary). Correct/wrong animation overlays using Lottie/Reanimated full-screen flashes."
+    },
+    {
+      "name": "Result Summary",
+      "purpose": "Post-match gamified screen summarizing score, correct/wrong stats, and social sharing.",
+      "states": {
+        "loading": "Calculating...",
+        "empty": "None",
+        "error": "Failed to sync score"
+      },
+      "layout": "Trophy image centerpiece. Large bold typographic score display. Stat breakdown grid (Accuracy, Streak). 'Share to Social' and 'Play Again' large primary bottom actions."
+    },
+    {
+      "name": "Leaderboard",
+      "purpose": "Global ranking of players requiring Google Login to participate.",
+      "states": {
+        "loading": "Loading ranks...",
+        "empty": "No players logged yet.",
+        "error": "Login failed."
+      },
+      "layout": "Tabs for 'Global' and 'Friends'. Top 3 podium layout. Below: tight vertical list of players with ranks, avatars, and scores. Fixed bottom bar prompting 'Login with Google to submit score' if unauthenticated."
+    }
+  ],
+  "images": {
+    "stadium_background": {
+      "url": "https://images.unsplash.com/photo-1679391029864-d46f366a456b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA4Mzl8MHwxfHNlYXJjaHwyfHxmb290YmFsbCUyMHN0YWRpdW0lMjBkYXJrJTIwYXRtb3NwaGVyaWMlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc5MjA4OTEzNnww&ixlib=rb-4.1.0&q=85",
+      "alt": "Dark atmospheric football stadium"
+    },
+    "player_placeholder_1": {
+      "url": "https://images.unsplash.com/photo-1516224498413-84ecf3a1e7fd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwxfHxzb2NjZXIlMjBwbGF5ZXIlMjBmYWNlJTIwcG9ydHJhaXR8ZW58MHx8fHwxNzkyMDg5MTQxfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Placeholder soccer player face"
+    },
+    "trivia_jersey": {
+      "url": "https://images.unsplash.com/photo-1577212017184-80cc0da11082?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTV8MHwxfHNlYXJjaHwxfHxyZWQlMjBzb2NjZXIlMjBqZXJzZXl8ZW58MHx8fHwxNzkyMDg5MTQxfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Red soccer jersey"
+    },
+    "result_trophy": {
+      "url": "https://images.unsplash.com/photo-1578269174936-2709b6aeb913?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzR8MHwxfHNlYXJjaHwxfHxnb2xkJTIwdHJvcGh5JTIwY3VwJTIwaXNvbGF0ZWR8ZW58MHx8fHwxNzkyMDg5MTQxfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Gold trophy cup"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the 7 Dark-First Utility guidelines. Utilize #0F1115 as the primary background.",
+    "Madura United's primary brand color is #C8102E (deep red), use it primarily for buttons, active states, and accents.",
+    "For typography, use 'Bebas Neue' for large athletic numeric displays (score, timer, level) and 'Manrope' for readable body and quiz options.",
+    "Implement a gradient scrim (top to bottom, transparent to black) over the stadium_background image on the Home screen to ensure text readability.",
+    "In Quiz Gameplay, ensure touch targets for the 4 option cards are massive (flex fill the bottom area) and easy to tap while holding the phone.",
+    "When options are pressed, instantly highlight the card with a borderStrong before showing the correct/wrong animation overlay.",
+    "On the Result Summary, heavily emphasize the Gold accent (#D4AF37) for high scores or correct answers.",
+    "Bind the haptics block strictly to user interactions: selection on standard taps, success on correct answers, error on wrong answers."
+  ]
+}
