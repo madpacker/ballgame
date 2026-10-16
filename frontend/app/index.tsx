@@ -23,6 +23,7 @@ export default function Home() {
   const [unread, setUnread] = useState(0);
   const [theme, setTheme] = useState<{ title: string; subtitle: string; accent: string; id: string } | null>(null);
   const [topStreaks, setTopStreaks] = useState<{ user_id: string; name: string; picture?: string | null; current_streak: number }[]>([]);
+  const [live, setLive] = useState<{ live: boolean; match?: any; minute?: number; multiplier?: number } | null>(null);
 
   useEffect(() => {
     getLocalHigh().then(setHigh);
@@ -32,6 +33,13 @@ export default function Home() {
     api<{ user_id: string; name: string; picture?: string | null; current_streak: number }[]>("/top-streaks?limit=5")
       .then(setTopStreaks)
       .catch(() => setTopStreaks([]));
+    const refreshLive = () =>
+      api<{ live: boolean; match?: any; minute?: number; multiplier?: number }>("/live-match")
+        .then(setLive)
+        .catch(() => setLive(null));
+    refreshLive();
+    const id = setInterval(refreshLive, 60000);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
@@ -131,6 +139,24 @@ export default function Home() {
       >
         <Text style={styles.sectionTitle}>PILIH MODE PERTANDINGAN</Text>
 
+        {live?.live && live.match && (
+          <Pressable
+            testID="live-boost-banner"
+            onPress={() => router.push("/matches")}
+            style={({ pressed }) => [styles.liveBanner, pressed && { opacity: 0.9 }]}
+          >
+            <View style={styles.liveDot} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.liveTag}>LIVE · MENIT {live.minute}&apos;</Text>
+              <Text style={styles.liveTitle}>
+                {live.match.home ? "MU vs " + live.match.opponent : live.match.opponent + " vs MU"}
+              </Text>
+              <Text style={styles.liveSub}>⚡ Semua skor quiz dapat {live.multiplier}X bonus!</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={22} color={colors.onBrandPrimary} />
+          </Pressable>
+        )}
+
         {theme && (
           <Pressable
             testID="weekly-theme-banner"
@@ -206,6 +232,14 @@ export default function Home() {
         </Pressable>
 
         <View style={styles.quickRow}>
+          <Pressable
+            testID="matches-shortcut"
+            onPress={() => router.push("/matches")}
+            style={styles.quickBtn}
+          >
+            <Ionicons name="football" size={22} color={colors.brandSecondary} />
+            <Text style={styles.quickTxt}>Prediksi</Text>
+          </Pressable>
           <Pressable
             testID="leaderboard-shortcut"
             onPress={() => router.push("/leaderboard")}
@@ -482,4 +516,22 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   streakDaysTxt: { color: colors.brandSecondary, fontWeight: "900", fontSize: 12 },
+  liveBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md as number,
+    backgroundColor: colors.error,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    borderRadius: radius.lg,
+  },
+  liveDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.onBrandPrimary,
+  },
+  liveTag: { color: colors.onBrandPrimary, fontSize: 10, letterSpacing: 2, fontWeight: "900", opacity: 0.9 },
+  liveTitle: { color: colors.onBrandPrimary, fontWeight: "900", fontSize: 15, marginTop: 2 },
+  liveSub: { color: colors.onBrandPrimary, fontSize: 12, marginTop: 2, opacity: 0.95 },
 });

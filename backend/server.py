@@ -339,6 +339,19 @@ async def submit_score(body: ScoreSubmit, user: dict = Depends(get_current_user)
             streak_bonus = 25
 
     final_score = int(body.score) + streak_bonus
+    # Live match 2x bonus
+    live_bonus = 0
+    try:
+        cursor = db.matches.find({"deleted_at": {"$exists": False}, "final_home": None}, {"_id": 0}).sort(
+            "kickoff_at", -1
+        )
+        async for m in cursor:
+            if _match_status(m) == "live":
+                live_bonus = final_score  # doubles the score
+                break
+    except Exception:
+        pass
+    final_score += live_bonus
     doc = {
         "entry_id": f"sc_{uuid.uuid4().hex[:12]}",
         "user_id": user["user_id"],
@@ -380,7 +393,7 @@ async def submit_score(body: ScoreSubmit, user: dict = Depends(get_current_user)
             },
             upsert=True,
         )
-    return {"ok": True, "score": doc["score"], "streak": current, "streak_bonus": streak_bonus, "streak_milestone": streak_milestone}
+    return {"ok": True, "score": doc["score"], "streak": current, "streak_bonus": streak_bonus, "streak_milestone": streak_milestone, "live_bonus": live_bonus}
 
 
 @api_router.get("/leaderboard", response_model=List[LeaderboardEntry])
@@ -784,6 +797,55 @@ class ChallengeOut(BaseModel):
     created_at: datetime
 
 
+class MatchIn(BaseModel):
+    opponent: str
+    kickoff_at: datetime  # UTC
+    home: bool = True  # Madura United at home?
+    competition: Optional[str] = "Liga 1"
+
+
+class MatchResult(BaseModel):
+    final_home: int
+    final_away: int
+    scorer_player_ids: List[str] = Field(default_factory=list)
+    motm_player_id: Optional[str] = None
+
+
+class MatchOut(BaseModel):
+    match_id: str
+    opponent: str
+    kickoff_at: datetime
+    home: bool
+    competition: Optional[str] = None
+    final_home: Optional[int] = None
+    final_away: Optional[int] = None
+    scorer_player_ids: List[str] = Field(default_factory=list)
+    motm_player_id: Optional[str] = None
+    status: str  # "upcoming" | "live" | "finished"
+
+
+class PredictionIn(BaseModel):
+    pred_home: int
+    pred_away: int
+    scorer_player_id: Optional[str] = None
+    motm_player_id: Optional[str] = None
+
+
+class PredictionOut(BaseModel):
+    prediction_id: str
+    match_id: str
+    pred_home: int
+    pred_away: int
+    scorer_player_id: Optional[str] = None
+    motm_player_id: Optional[str] = None
+    scorer_name: Optional[str] = None
+    motm_name: Optional[str] = None
+    points: Optional[int] = None
+    user_id: str
+    name: str
+    picture: Optional[str] = None
+
+
 @api_router.get("/me/badges", response_model=List[BadgeOut])
 async def my_badges(user: dict = Depends(get_current_user), limit: int = 30):
     cursor = (
@@ -886,6 +948,245 @@ async def top_streaks(limit: int = 5):
     return results
 
 
+# ---------- Matches & Predictions ----------
+LIVE_WINDOW_MIN = 110  # kickoff + 110 min = live window
+
+
+def _match_status(m: dict) -> str:
+    now = datetime.now(timezone.utc)
+    kickoff = m["kickoff_at"]
+    if isinstance(kickoff, datetime) and kickoff.tzinfo is None:
+        kickoff = kickoff.replace(tzinfo=timezone.utc)
+    if m.get("final_home") is not None and m.get("final_away") is not None:
+        return "finished"
+    if kickoff <= now <= kickoff + timedelta(minutes=LIVE_WINDOW_MIN):
+        return "live"
+    return "upcoming" if now < kickoff else "finished"
+
+
+def _match_to_out(m: dict) -> MatchOut:
+    return MatchOut(
+        match_id=m["match_id"],
+        opponent=m["opponent"],
+        kickoff_at=m["kickoff_at"],
+        home=bool(m.get("home", True)),
+        competition=m.get("competition"),
+        final_home=m.get("final_home"),
+        final_away=m.get("final_away"),
+        scorer_player_ids=m.get("scorer_player_ids", []) or [],
+        motm_player_id=m.get("motm_player_id"),
+        status=_match_status(m),
+    )
+
+
+@api_router.get("/matches", response_model=List[MatchOut])
+async def matches_list():
+    cursor = db.matches.find({"deleted_at": {"$exists": False}}, {"_id": 0}).sort("kickoff_at", -1)
+    results: List[MatchOut] = []
+    async for m in cursor:
+        results.append(_match_to_out(m))
+    return results
+
+
+@api_router.post("/admin/matches", response_model=MatchOut)
+async def matches_create(body: MatchIn, user: dict = Depends(require_admin)):
+    doc = {
+        "match_id": f"mt_{uuid.uuid4().hex[:12]}",
+        "opponent": body.opponent.strip(),
+        "kickoff_at": body.kickoff_at.astimezone(timezone.utc) if body.kickoff_at.tzinfo else body.kickoff_at.replace(tzinfo=timezone.utc),
+        "home": body.home,
+        "competition": body.competition,
+        "final_home": None,
+        "final_away": None,
+        "created_at": datetime.now(timezone.utc),
+        "created_by": user["user_id"],
+    }
+    await db.matches.insert_one(doc)
+    return _match_to_out(doc)
+
+
+@api_router.post("/admin/matches/{match_id}/result", response_model=MatchOut)
+async def matches_set_result(match_id: str, body: MatchResult, user: dict = Depends(require_admin)):
+    m = await db.matches.find_one({"match_id": match_id}, {"_id": 0})
+    if not m:
+        raise HTTPException(status_code=404, detail="match_not_found")
+    final_home = int(body.final_home)
+    final_away = int(body.final_away)
+    scorer_ids = list(body.scorer_player_ids or [])
+    motm_id = body.motm_player_id
+    await db.matches.update_one(
+        {"match_id": match_id},
+        {"$set": {
+            "final_home": final_home,
+            "final_away": final_away,
+            "scorer_player_ids": scorer_ids,
+            "motm_player_id": motm_id,
+        }},
+    )
+    # Score each prediction and notify.
+    async for p in db.predictions.find({"match_id": match_id, "points": {"$exists": False}}, {"_id": 0}):
+        exact = p["pred_home"] == final_home and p["pred_away"] == final_away
+        pred_winner = (
+            "home" if p["pred_home"] > p["pred_away"] else "away" if p["pred_away"] > p["pred_home"] else "draw"
+        )
+        actual_winner = (
+            "home" if final_home > final_away else "away" if final_away > final_home else "draw"
+        )
+        points = 300 if exact else (100 if pred_winner == actual_winner else 0)
+        scorer_hit = False
+        if p.get("scorer_player_id") and p["scorer_player_id"] in scorer_ids:
+            points += 150
+            scorer_hit = True
+        motm_hit = False
+        if p.get("motm_player_id") and motm_id and p["motm_player_id"] == motm_id:
+            points += 200
+            motm_hit = True
+        await db.predictions.update_one(
+            {"prediction_id": p["prediction_id"]}, {"$set": {"points": points}}
+        )
+        try:
+            parts = []
+            if exact:
+                parts.append("tepat skor +300")
+            elif pred_winner == actual_winner:
+                parts.append("tebak pemenang +100")
+            if scorer_hit:
+                parts.append("pencetak gol +150")
+            if motm_hit:
+                parts.append("MOTM +200")
+            tail = (" · " + " · ".join(parts)) if parts else ""
+            msg = f"⚽ Hasil {final_home}-{final_away} vs {m['opponent']} · total +{points} poin{tail}."
+            await push_notification(p["user_id"], "prediction", msg)
+        except Exception:
+            pass
+    doc = await db.matches.find_one({"match_id": match_id}, {"_id": 0})
+    return _match_to_out(doc)
+
+
+@api_router.delete("/admin/matches/{match_id}")
+async def matches_delete(match_id: str, user: dict = Depends(require_admin)):
+    res = await db.matches.update_one(
+        {"match_id": match_id}, {"$set": {"deleted_at": datetime.now(timezone.utc)}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="match_not_found")
+    return {"ok": True}
+
+
+@api_router.post("/matches/{match_id}/predict", response_model=PredictionOut)
+async def predictions_create(
+    match_id: str, body: PredictionIn, user: dict = Depends(get_current_user)
+):
+    m = await db.matches.find_one({"match_id": match_id}, {"_id": 0})
+    if not m:
+        raise HTTPException(status_code=404, detail="match_not_found")
+    if _match_status(m) != "upcoming":
+        raise HTTPException(status_code=400, detail="predictions_closed")
+
+    scorer_name = None
+    motm_name = None
+    if body.scorer_player_id:
+        pl = await db.players.find_one({"player_id": body.scorer_player_id}, {"_id": 0})
+        scorer_name = pl["name"] if pl else None
+    if body.motm_player_id:
+        pl = await db.players.find_one({"player_id": body.motm_player_id}, {"_id": 0})
+        motm_name = pl["name"] if pl else None
+
+    doc = {
+        "prediction_id": f"pr_{uuid.uuid4().hex[:12]}",
+        "match_id": match_id,
+        "user_id": user["user_id"],
+        "name": user["name"],
+        "picture": user.get("picture"),
+        "pred_home": int(body.pred_home),
+        "pred_away": int(body.pred_away),
+        "scorer_player_id": body.scorer_player_id,
+        "scorer_name": scorer_name,
+        "motm_player_id": body.motm_player_id,
+        "motm_name": motm_name,
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.predictions.update_one(
+        {"user_id": user["user_id"], "match_id": match_id},
+        {"$set": doc},
+        upsert=True,
+    )
+    saved = await db.predictions.find_one(
+        {"user_id": user["user_id"], "match_id": match_id}, {"_id": 0}
+    )
+    return PredictionOut(**saved)
+
+
+@api_router.get("/matches/{match_id}/predictions", response_model=List[PredictionOut])
+async def predictions_for_match(match_id: str, limit: int = 100):
+    cursor = db.predictions.find({"match_id": match_id}, {"_id": 0}).limit(limit)
+    results: List[PredictionOut] = []
+    async for p in cursor:
+        results.append(PredictionOut(**p))
+    return results
+
+
+@api_router.get("/me/prediction/{match_id}")
+async def my_prediction(match_id: str, user: dict = Depends(get_current_user)):
+    doc = await db.predictions.find_one(
+        {"user_id": user["user_id"], "match_id": match_id}, {"_id": 0}
+    )
+    if not doc:
+        return {"prediction": None}
+    return {"prediction": PredictionOut(**doc)}
+
+
+@api_router.get("/predictions/leaderboard")
+async def predictions_leaderboard(limit: int = 50):
+    pipeline = [
+        {"$match": {"points": {"$exists": True}}},
+        {
+            "$group": {
+                "_id": "$user_id",
+                "name": {"$last": "$name"},
+                "picture": {"$last": "$picture"},
+                "total_points": {"$sum": "$points"},
+                "predictions_count": {"$sum": 1},
+            }
+        },
+        {"$sort": {"total_points": -1}},
+        {"$limit": int(limit)},
+    ]
+    results = []
+    async for row in db.predictions.aggregate(pipeline):
+        results.append(
+            {
+                "user_id": row["_id"],
+                "name": row.get("name"),
+                "picture": row.get("picture"),
+                "total_points": int(row.get("total_points", 0)),
+                "predictions_count": int(row.get("predictions_count", 0)),
+            }
+        )
+    return results
+
+
+@api_router.get("/live-match")
+async def live_match():
+    """Returns the currently-live Madura United match, if any."""
+    cursor = db.matches.find({"deleted_at": {"$exists": False}, "final_home": None}, {"_id": 0}).sort(
+        "kickoff_at", -1
+    )
+    async for m in cursor:
+        if _match_status(m) == "live":
+            kickoff = m["kickoff_at"]
+            if isinstance(kickoff, datetime) and kickoff.tzinfo is None:
+                kickoff = kickoff.replace(tzinfo=timezone.utc)
+            minute = int((datetime.now(timezone.utc) - kickoff).total_seconds() / 60)
+            return {
+                "live": True,
+                "match": _match_to_out(m).model_dump(),
+                "minute": max(1, minute),
+                "multiplier": 2,
+            }
+    return {"live": False}
+
+
 @api_router.get("/challenges/{challenge_id}", response_model=ChallengeOut)
 async def challenges_get(challenge_id: str):
     doc = await db.challenges.find_one({"challenge_id": challenge_id}, {"_id": 0})
@@ -959,6 +1260,10 @@ async def startup_indexes():
         await db.challenges.create_index("challenge_id", unique=True)
         await db.challenges.create_index([("from_user_id", 1), ("created_at", -1)])
         await db.users.create_index([("current_streak", -1)])
+        await db.matches.create_index("match_id", unique=True)
+        await db.matches.create_index([("kickoff_at", -1)])
+        await db.predictions.create_index([("user_id", 1), ("match_id", 1)], unique=True)
+        await db.predictions.create_index("match_id")
     except Exception as e:
         logger.warning("index creation issue: %s", e)
 

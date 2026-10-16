@@ -1,0 +1,55 @@
+{
+  "summary": "Iteration 7 backend-only testing for Cak Mad Quiz Matches + Predictions + Live Match Mode. Extended /app/backend/tests/test_cakmad_api.py with 32 new tests across 6 classes: TestMatchesPublic (4), TestMatchesAdminGate (6), TestPredictionsAuthGate (4), TestPredictionsPublic (5), TestLiveMatch (4), TestIter7Indexes (4), TestRegressionIter7 (5). Validated: (1) GET /api/matches is public, returns 200 list of MatchOut with {match_id, opponent, kickoff_at, home, status} and status in {upcoming,live,finished}. (2) POST /api/admin/matches, POST /api/admin/matches/{id}/result, DELETE /api/admin/matches/{id} all return 401 missing_token without auth and 401 invalid_session with bogus bearer. (3) POST /api/matches/{id}/predict and GET /api/me/prediction/{id} require auth (401). (4) GET /api/matches/{id}/predictions is public (200 even with bogus bearer, never 401). (5) GET /api/predictions/leaderboard is public, returns 200 list; items carry user_id, total_points (int), predictions_count (int). (6) GET /api/live-match returns 200 with {live: bool}; when no live match the response is exactly {live: false} (shape asserted). (7) Mongo indexes verified via index_information: matches.match_id unique, matches.(kickoff_at, -1), predictions.(user_id, match_id) unique, predictions.match_id. (8) Regression preserved: /api/, /api/top-streaks, /api/weekly-theme, /api/leaderboard/weekly, /api/notifications (401). Final: 140/140 PASSED against EXPO_PUBLIC_BACKEND_URL (previous 108 + 32 new). No valid Google session_id available, so admin flows (create match -> set result -> predictions scored -> notifications pushed -> leaderboard updated -> live submit_score live_bonus doubles final_score) were NOT exercised end-to-end; only public endpoints and 401 boundaries + indexes were covered as instructed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/matches", "issue": "No pagination/limit. The endpoint returns ALL non-deleted matches sorted by kickoff_at desc. Consider ?limit=&skip= or ?status=upcoming|live|finished filter to keep response small as seasons accumulate."},
+      {"endpoint": "GET /api/predictions/leaderboard", "issue": "limit query is unbounded (int(limit) with no clamp). Negative/zero values are passed to $limit which raises in Mongo; very large values are a potential DoS. Add Pydantic Query(default=50, ge=1, le=200)."},
+      {"endpoint": "GET /api/predictions/leaderboard", "issue": "Uses $last on name/picture during $group — ordering is unspecified in Mongo without a prior $sort, so a user who renamed will get an arbitrary prior name. Consider $sort by created_at desc before $group, or lookup against users collection."},
+      {"endpoint": "POST /api/admin/matches/{id}/result", "issue": "Idempotency: body validation accepts any ints including negative scores. Add Pydantic Field(ge=0) to final_home/final_away. Also, calling /result twice re-scores only predictions missing a points field, which is correct, but there is no guard against editing the already-recorded final score (overwrites final_home/away silently)."},
+      {"endpoint": "POST /api/matches/{id}/predict", "issue": "pred_home / pred_away accept any int including negatives. Add Field(ge=0, le=99)."},
+      {"endpoint": "GET /api/live-match + submit_score live_bonus loop", "issue": "Both scan db.matches.find({'final_home': None}).sort('kickoff_at', -1) and iterate until status==live. Fine today, but with many unfinished matches the compound index (status virtual via kickoff window) is not used. Consider caching the current live match_id in app_settings or filtering kickoff_at between (now-110min, now)."},
+      {"endpoint": "POST /api/scores", "issue": "live_bonus doubles the ALREADY streak-bonused score (final_score += final_score), so the streak bonus is also doubled during a live match. If the intent is 'live doubles the base + streak' this is fine; if intent is 'live doubles only base', move the live_bonus calc before adding streak_bonus. Confirm with product."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_cakmad_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Add Pydantic bounds: MatchResult.final_home/away Field(ge=0, le=99); PredictionIn.pred_home/away Field(ge=0, le=99); predictions_leaderboard limit Query(ge=1, le=200).",
+    "Confirm the live-match score-doubling semantics (double base-only vs double base+streak). Current impl doubles the already-streak-bonused score.",
+    "Narrow the live-match scan window: query kickoff_at within (now - LIVE_WINDOW_MIN, now] to leverage the new (kickoff_at, -1) index instead of scanning every unfinished match.",
+    "Add a GET /api/matches?status=&limit= filter to keep the public list bounded as the match history grows.",
+    "Prediction leaderboard: $sort by created_at desc before $group so $last picks the most recent name/picture, or $lookup users.",
+    "Carried over: split server.py (now >1200 lines) into routers (auth, scores, friends, players, notifications, challenges, streaks, themes, matches, predictions, live).",
+    "Carried over: Field(ge=0) on ChallengeCreate/ChallengeComplete.score; validate theme_id against THEMES catalog; dedupe challenge-beat notifications; add GET /api/me/challenges listing.",
+    "Carried over: narrow CORS allow_origins in prod; $unset champion_until on expiry."
+  ],
+  "critical_code_review_comments": [
+    "server.py line 345-353: live-match detection inside submit_score silently swallows all exceptions. If the matches collection is in a weird state the bonus is skipped with no log. Log at WARN at minimum.",
+    "server.py line 1065: predictions_create upserts with the full doc including prediction_id in $set, but on an existing document the prediction_id is REPLACED by the newly generated one — this means a user editing their prediction gets a brand-new prediction_id each time. Likely harmless (we query by user_id+match_id), but it churns the id. Use $setOnInsert for prediction_id and created_at.",
+    "server.py line 1008: matches_set_result iterates predictions one-by-one with per-doc update + per-doc notification. For many predictions this is slow. Use bulk_write for scoring and gather notifications.",
+    "server.py _match_status: tz-naive kickoff is coerced inside the function on every call (hot path, called in list/live/predict/score). Normalize once at insert_one (we already do .astimezone(utc) in matches_create but older rows may lack tz).",
+    "server.py line 1052: predictions_create rejects non-upcoming matches, which blocks predicting during a live match. If product wants 'close at kickoff', change to `if _match_status(m) == 'finished' or kickoff <= now` instead of just != 'upcoming'. Confirm with product.",
+    "server.py line 1095-1122: predictions_leaderboard pipeline has no stage to break ties — users with equal total_points may re-order between requests. Add a secondary sort by predictions_count desc then _id asc.",
+    "StreakLeader + top-streaks still expose username (MU-XXXXXX friend code) publicly — flagged in iter 6, still open.",
+    "No GET /api/matches/{id} single-fetch endpoint; clients must list all matches to render a single match page. Minor UX issue but potentially bandwidth-heavy."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_cakmad_api.py (appended TestMatchesPublic x4, TestMatchesAdminGate x6, TestPredictionsAuthGate x4, TestPredictionsPublic x5, TestLiveMatch x4, TestIter7Indexes x4, TestRegressionIter7 x5 — 32 new tests, total 140 PASSED)"
+  ],
+  "success_rate": {"backend": "100% (140/140)", "frontend": "not tested (backend-only run per request)"},
+  "seed_data_creation": "None. All iteration-7 tests hit public endpoints or 401 boundaries, and introspect indexes via pymongo index_information(). No documents written to Mongo.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "To fully verify Iteration 7 end-to-end the next agent needs a valid Google session_id. Required flows: (1) auth as admin (first user) + two more users. (2) POST /api/admin/matches with kickoff_at in future → GET /api/matches shows status=upcoming. (3) POST /api/matches/{id}/predict as user2 and user3 with different scores → GET /api/matches/{id}/predictions returns both. (4) GET /api/me/prediction/{id} returns each user's own prediction. (5) Update kickoff_at in Mongo to (now - 10 min) to simulate live → GET /api/live-match returns {live:true, minute:10, multiplier:2, match:{...}}; POST /api/scores response includes live_bonus = final_score (effective 2x). (6) POST /api/admin/matches/{id}/result final_home/away → verify predictions.points scored (exact=300, winner=100, else=0) + prediction notifications pushed to each predictor + GET /api/predictions/leaderboard reflects totals. (7) DELETE /api/admin/matches/{id} → GET /api/matches no longer lists it. (8) Duplicate POST /predict for same user+match must upsert (one doc). (9) Second user tries creating a match without admin → expect 403 admin_only. Public URL: EXPO_PUBLIC_BACKEND_URL in /app/frontend/.env. Note the minor issues above (no bounds on scores, live_bonus doubles streak-bonused score, no pagination on /matches) — those are product/validation decisions for the main agent.",
+  "rca_of_issue": "N/A — no failures. All 11 features/boundaries listed in the review request are implemented correctly: GET /api/matches public 200 list, GET /api/live-match public {live:false} fallback, GET /api/predictions/leaderboard public 200 list, all admin match write endpoints 401 without auth, POST /predict + GET /me/prediction/{id} 401 without auth, GET /matches/{id}/predictions public (200 not 401), and all four Mongo indexes present with correct uniqueness. Regression on /api/, /api/top-streaks, /api/weekly-theme, /api/leaderboard/weekly, /api/notifications (401) all green."
+}

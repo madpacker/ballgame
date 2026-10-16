@@ -913,3 +913,455 @@ class TestRegressionIter6:
         r = api_client.get(f"{base_url}/api/leaderboard/weekly")
         assert r.status_code == 200
         assert isinstance(r.json(), list)
+
+
+# ---------- Iteration 7: Matches (public list + admin-gated writes) ----------
+class TestMatchesPublic:
+    """GET /api/matches — public, returns 200 array."""
+
+    def test_matches_list_public_200(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/matches")
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)
+
+    def test_matches_list_no_auth_not_401(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/matches")
+        assert r.status_code != 401, f"Public endpoint but got 401: {r.text}"
+
+    def test_matches_list_ignores_bogus_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/matches",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)
+
+    def test_matches_item_shape(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/matches")
+        assert r.status_code == 200
+        data = r.json()
+        expected = {"match_id", "opponent", "kickoff_at", "home", "status"}
+        for m in data:
+            missing = expected - set(m.keys())
+            assert not missing, f"Missing keys in MatchOut: {missing}. Item: {m}"
+            assert m["status"] in ("upcoming", "live", "finished")
+
+
+class TestMatchesAdminGate:
+    """POST /api/admin/matches, /result, DELETE — admin only (401 without auth)."""
+
+    def test_matches_create_without_auth(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/admin/matches",
+            json={
+                "opponent": "TEST_Opponent",
+                "kickoff_at": "2030-01-01T00:00:00Z",
+                "home": True,
+                "competition": "Liga 1",
+            },
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_matches_create_invalid_bearer(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/admin/matches",
+            headers={"Authorization": "Bearer invalid-xyz"},
+            json={"opponent": "X", "kickoff_at": "2030-01-01T00:00:00Z"},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+    def test_matches_set_result_without_auth(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/admin/matches/mt_fake/result",
+            json={"final_home": 2, "final_away": 1},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_matches_set_result_invalid_bearer(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/admin/matches/mt_fake/result",
+            headers={"Authorization": "Bearer invalid-xyz"},
+            json={"final_home": 1, "final_away": 0},
+        )
+        assert r.status_code == 401, r.text
+
+    def test_matches_delete_without_auth(self, api_client, base_url):
+        r = api_client.delete(f"{base_url}/api/admin/matches/mt_fake")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_matches_delete_invalid_bearer(self, api_client, base_url):
+        r = api_client.delete(
+            f"{base_url}/api/admin/matches/mt_fake",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+
+
+# ---------- Iteration 7: Predictions ----------
+class TestPredictionsAuthGate:
+    """POST /api/matches/{id}/predict + GET /api/me/prediction/{id} — auth required."""
+
+    def test_predict_without_auth(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/matches/mt_fake/predict",
+            json={"pred_home": 2, "pred_away": 1},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_predict_invalid_bearer(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/matches/mt_fake/predict",
+            headers={"Authorization": "Bearer invalid-xyz"},
+            json={"pred_home": 2, "pred_away": 1},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+    def test_my_prediction_without_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/me/prediction/mt_fake")
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_my_prediction_invalid_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/me/prediction/mt_fake",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 401, r.text
+
+
+class TestPredictionsPublic:
+    """GET /api/matches/{id}/predictions (public) + GET /api/predictions/leaderboard (public)."""
+
+    def test_predictions_for_match_is_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/matches/mt_fake/predictions")
+        assert r.status_code != 401, f"Should be public but got 401: {r.text}"
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)
+
+    def test_predictions_for_match_ignores_bogus_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/matches/mt_fake/predictions",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)
+
+    def test_predictions_leaderboard_public_200(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/predictions/leaderboard")
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)
+
+    def test_predictions_leaderboard_no_auth_not_401(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/predictions/leaderboard")
+        assert r.status_code != 401
+
+    def test_predictions_leaderboard_item_shape(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/predictions/leaderboard?limit=50")
+        assert r.status_code == 200
+        for item in r.json():
+            for k in ("user_id", "total_points", "predictions_count"):
+                assert k in item, f"Missing {k} in leaderboard item: {item}"
+            assert isinstance(item["total_points"], int)
+            assert isinstance(item["predictions_count"], int)
+
+
+# ---------- Iteration 7: Live Match (public) ----------
+class TestLiveMatch:
+    """GET /api/live-match — public; {live: false} when none live."""
+
+    def test_live_match_public_200(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/live-match")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, dict)
+        assert "live" in data
+        assert isinstance(data["live"], bool)
+
+    def test_live_match_no_auth_not_401(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/live-match")
+        assert r.status_code != 401
+
+    def test_live_match_ignores_bogus_bearer(self, api_client, base_url):
+        r = api_client.get(
+            f"{base_url}/api/live-match",
+            headers={"Authorization": "Bearer invalid-xyz"},
+        )
+        assert r.status_code == 200, r.text
+
+    def test_live_match_shape_when_not_live(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/live-match")
+        assert r.status_code == 200
+        data = r.json()
+        if data["live"] is False:
+            # When no live match, response should be exactly {"live": False}
+            assert data == {"live": False}, f"Unexpected shape: {data}"
+        else:
+            # If a live match exists, verify expected keys
+            assert "match" in data and "minute" in data and "multiplier" in data
+            assert data["multiplier"] == 2
+            assert isinstance(data["minute"], int) and data["minute"] >= 1
+
+
+# ---------- Iteration 7: Mongo indexes for matches/predictions ----------
+class TestIter7Indexes:
+    @pytest.fixture(scope="class")
+    def mongo_db(self):
+        url = os.environ.get("MONGO_URL") or "mongodb://localhost:27017"
+        name = os.environ.get("DB_NAME") or "test_database"
+        try:
+            from dotenv import dotenv_values
+            vals = dotenv_values("/app/backend/.env")
+            url = vals.get("MONGO_URL", url)
+            name = vals.get("DB_NAME", name)
+        except Exception:
+            pass
+        client = MongoClient(url)
+        yield client[name]
+        client.close()
+
+    def test_matches_match_id_unique_index(self, mongo_db):
+        idx = mongo_db.matches.index_information()
+        mid = [v for v in idx.values() if tuple(f[0] for f in v.get("key", [])) == ("match_id",)]
+        assert mid, f"match_id index missing. Have: {list(idx.keys())}"
+        assert any(v.get("unique") for v in mid), "match_id index not unique"
+
+    def test_matches_kickoff_desc_index(self, mongo_db):
+        idx = mongo_db.matches.index_information()
+        keys_sets = {tuple(f for f in v.get("key", [])): v for v in idx.values()}
+        comp = keys_sets.get((("kickoff_at", -1),))
+        assert comp is not None, (
+            f"(kickoff_at DESC) index missing. Have: {list(keys_sets.keys())}"
+        )
+
+    def test_predictions_user_match_unique_index(self, mongo_db):
+        idx = mongo_db.predictions.index_information()
+        keys_sets = {tuple(f[0] for f in v.get("key", [])): v for v in idx.values()}
+        comp = keys_sets.get(("user_id", "match_id"))
+        assert comp is not None, (
+            f"(user_id, match_id) index missing. Have: {list(keys_sets.keys())}"
+        )
+        assert comp.get("unique"), "(user_id, match_id) index not unique"
+
+    def test_predictions_match_id_index(self, mongo_db):
+        idx = mongo_db.predictions.index_information()
+        keys_sets = {tuple(f[0] for f in v.get("key", [])): v for v in idx.values()}
+        assert ("match_id",) in keys_sets, (
+            f"(match_id,) index missing. Have: {list(keys_sets.keys())}"
+        )
+
+
+# ---------- Iteration 7: Regression ----------
+class TestRegressionIter7:
+    def test_api_root(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/")
+        assert r.status_code == 200
+        assert "Cak Mad Quiz" in r.json().get("message", "")
+
+    def test_top_streaks_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/top-streaks")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_weekly_theme_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/weekly-theme")
+        assert r.status_code == 200
+        assert "week_key" in r.json()
+
+    def test_leaderboard_weekly_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard/weekly")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_notifications_requires_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/notifications")
+        assert r.status_code == 401
+        assert r.json().get("detail") == "missing_token"
+
+
+
+# ---------- Iteration 8: Extended predictions (scorer + MOTM) ----------
+class TestIter8MatchesShape:
+    """GET /api/matches items now carry scorer_player_ids (list) and motm_player_id (nullable)."""
+
+    def test_matches_items_have_scorer_and_motm_fields(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/matches")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+        for m in data:
+            assert "scorer_player_ids" in m, f"missing scorer_player_ids: {m}"
+            assert isinstance(m["scorer_player_ids"], list), (
+                f"scorer_player_ids must be list, got {type(m['scorer_player_ids'])}: {m}"
+            )
+            # all list members must be strings
+            for s in m["scorer_player_ids"]:
+                assert isinstance(s, str), f"scorer id not string: {s}"
+            assert "motm_player_id" in m, f"missing motm_player_id: {m}"
+            assert m["motm_player_id"] is None or isinstance(m["motm_player_id"], str), (
+                f"motm_player_id must be str or None, got {m['motm_player_id']!r}"
+            )
+
+
+class TestIter8LiveMatchShape:
+    """GET /api/live-match still returns {live:false} shape when none live."""
+
+    def test_live_match_shape_regression(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/live-match")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, dict)
+        assert "live" in data and isinstance(data["live"], bool)
+        if data["live"] is False:
+            assert data == {"live": False}, f"Unexpected shape when not live: {data}"
+        else:
+            # If a live match exists, the embedded MatchOut must also carry the new fields.
+            m = data.get("match")
+            assert isinstance(m, dict)
+            assert "scorer_player_ids" in m and isinstance(m["scorer_player_ids"], list)
+            assert "motm_player_id" in m
+
+
+class TestIter8PredictAuthGate:
+    """POST /api/matches/{id}/predict still 401 without auth (regression)."""
+
+    def test_predict_without_auth_still_401(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/matches/mt_fake/predict",
+            json={"pred_home": 2, "pred_away": 1},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_predict_with_scorer_motm_without_auth_still_401(self, api_client, base_url):
+        # Extended body shape (scorer_player_id + motm_player_id) must still 401 w/o auth.
+        r = api_client.post(
+            f"{base_url}/api/matches/mt_fake/predict",
+            json={
+                "pred_home": 2,
+                "pred_away": 1,
+                "scorer_player_id": "pl_fake123",
+                "motm_player_id": "pl_fake456",
+            },
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_predict_with_scorer_motm_invalid_bearer_still_401(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/matches/mt_fake/predict",
+            headers={"Authorization": "Bearer invalid-xyz"},
+            json={
+                "pred_home": 1,
+                "pred_away": 0,
+                "scorer_player_id": "pl_abc",
+                "motm_player_id": "pl_def",
+            },
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+    def test_predict_without_scorer_motm_fields_still_401(self, api_client, base_url):
+        # Scorer / MOTM are optional — omitting them must still 401 (not 422).
+        r = api_client.post(
+            f"{base_url}/api/matches/mt_fake/predict",
+            json={"pred_home": 3, "pred_away": 3},
+        )
+        assert r.status_code == 401, r.text
+
+
+class TestIter8AdminResultAuthGate:
+    """POST /api/admin/matches/{id}/result still 401 without auth, with extended body."""
+
+    def test_result_without_auth_still_401(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/admin/matches/mt_fake/result",
+            json={"final_home": 2, "final_away": 1},
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_result_with_scorer_ids_and_motm_without_auth_still_401(self, api_client, base_url):
+        # Extended body shape must still 401 w/o auth (not 422).
+        r = api_client.post(
+            f"{base_url}/api/admin/matches/mt_fake/result",
+            json={
+                "final_home": 3,
+                "final_away": 2,
+                "scorer_player_ids": ["pl_a", "pl_b", "pl_c"],
+                "motm_player_id": "pl_a",
+            },
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_result_with_empty_scorer_list_without_auth_still_401(self, api_client, base_url):
+        # Empty list + null motm must also be an acceptable shape (still 401 w/o auth).
+        r = api_client.post(
+            f"{base_url}/api/admin/matches/mt_fake/result",
+            json={
+                "final_home": 0,
+                "final_away": 0,
+                "scorer_player_ids": [],
+                "motm_player_id": None,
+            },
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "missing_token"
+
+    def test_result_with_scorer_motm_invalid_bearer_still_401(self, api_client, base_url):
+        r = api_client.post(
+            f"{base_url}/api/admin/matches/mt_fake/result",
+            headers={"Authorization": "Bearer invalid-xyz"},
+            json={
+                "final_home": 1,
+                "final_away": 1,
+                "scorer_player_ids": ["pl_x"],
+                "motm_player_id": "pl_y",
+            },
+        )
+        assert r.status_code == 401, r.text
+        assert r.json().get("detail") == "invalid_session"
+
+
+# ---------- Iteration 8: Regression ----------
+class TestRegressionIter8:
+    def test_api_root(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/")
+        assert r.status_code == 200
+        assert "Cak Mad Quiz" in r.json().get("message", "")
+
+    def test_players_list_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/players")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_predictions_leaderboard_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/predictions/leaderboard")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_top_streaks_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/top-streaks")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_weekly_theme_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/weekly-theme")
+        assert r.status_code == 200
+        assert "week_key" in r.json()
+
+    def test_leaderboard_weekly_public(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/leaderboard/weekly")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_notifications_requires_auth(self, api_client, base_url):
+        r = api_client.get(f"{base_url}/api/notifications")
+        assert r.status_code == 401
+        assert r.json().get("detail") == "missing_token"

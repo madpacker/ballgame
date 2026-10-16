@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 8 backend-only testing. Extended /app/backend/tests/test_cakmad_api.py with 17 new tests across 5 classes for extended predictions (scorer + MOTM). TestIter8MatchesShape (1): GET /api/matches items carry scorer_player_ids (list of str, defaults []) and motm_player_id (nullable str). TestIter8LiveMatchShape (1): GET /api/live-match returns {live:false} when not live; if live, embedded match has both new fields. TestIter8PredictAuthGate (4): POST /api/matches/{id}/predict with and without extended scorer_player_id/motm_player_id body — 401 missing_token w/o auth, 401 invalid_session with bogus bearer, 401 whether or not scorer/motm fields are present. TestIter8AdminResultAuthGate (4): POST /api/admin/matches/{id}/result accepts optional scorer_player_ids (list[str]) and motm_player_id (nullable str) — body is 401 missing_token/invalid_session without valid auth, including empty list + null motm_player_id variant to confirm validation passes before auth is checked. TestRegressionIter8 (7): /api/, /api/players, /api/predictions/leaderboard, /api/top-streaks, /api/weekly-theme, /api/leaderboard/weekly, /api/notifications (401). Final: 157/157 PASSED against EXPO_PUBLIC_BACKEND_URL (previous 140 + 17 new). As per request, no valid Google session_id available — scoring semantics (exact=300, winner=100, scorer=+150, motm=+200) and notification side-effects were NOT exercised end-to-end; only shape + 401 boundaries + regression were covered.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/matches/{id}/result", "issue": "No validation that scorer_player_ids members or motm_player_id reference existing players. Invalid player_ids are silently stored and the scorer_hit/motm_hit comparison will just miss. Consider validating against db.players (exists + not deleted + included_in_quiz) and 422 on unknown ids."},
+      {"endpoint": "POST /api/admin/matches/{id}/result", "issue": "scorer_player_ids is a list — a player who scored a brace is counted only once. Prediction scoring only awards +150 if the predicted scorer appears at least once; this is fine, but admins may be confused by de-dup. Document semantics or dedupe server-side explicitly."},
+      {"endpoint": "POST /api/matches/{id}/predict", "issue": "scorer_player_id/motm_player_id are not validated against the players collection. A user can submit any string and get the (null) scorer_name/motm_name. Validate and 422 on unknown player_id."},
+      {"endpoint": "POST /api/matches/{id}/predict", "issue": "No restriction that scorer_player_id must be included_in_quiz (or in the actual squad). Minor product decision — flag if intended to restrict."},
+      {"endpoint": "POST /api/admin/matches/{id}/result scoring loop", "issue": "Scorer bonus awards +150 for ANY match (even losses). Confirm with product whether scorer bonus should require the predicted scorer to have actually scored, which is already covered — but there is no cap on how high the bonus can stack (exact 300 + winner implicit + scorer 150 + motm 200 = 650 max). Consider documenting the max in /api docs."},
+      {"endpoint": "GET /api/matches response", "issue": "MatchOut always returns scorer_player_ids=[] for matches created before this iteration — older docs lacking the field get defaulted via _match_to_out (m.get('scorer_player_ids', []) or []). Correct behavior, just note data migration is not needed but older matches will display 'no scorer recorded' until an admin re-sets the result."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_cakmad_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Add player_id validation on POST /api/admin/matches/{id}/result (scorer_player_ids members + motm_player_id must exist in db.players with deleted_at absent) → 422 on unknown.",
+    "Add player_id validation on POST /api/matches/{id}/predict (scorer_player_id + motm_player_id, when provided) → 422 on unknown.",
+    "Expose scoring rubric in GET /api/weekly-theme or a dedicated /api/predictions/rules endpoint so the mobile UI can render the point breakdown dynamically instead of hard-coding (300/100/150/200).",
+    "Return scorer_name / motm_name in MatchOut (list[str] of scorer names + motm name) so clients don't need to cross-reference /api/players — currently only the predictions list exposes names.",
+    "Carried over from iter 7: add Pydantic Field(ge=0, le=99) on pred_home/pred_away and final_home/final_away; clamp predictions_leaderboard limit (ge=1, le=200).",
+    "Carried over: split server.py (now >1270 lines) into routers (matches/predictions is the biggest sub-domain now).",
+    "Carried over: narrow CORS allow_origins in prod; $unset champion_until on expiry; $setOnInsert prediction_id/created_at on upsert; bulk_write prediction scoring loop."
+  ],
+  "critical_code_review_comments": [
+    "server.py line 1035-1046: scoring loop runs find({match_id, points NOT EXISTS}) then per-doc update_one. For a popular match with 1k predictions this is 1k round-trips. Switch to bulk_write with UpdateOne operations and gather the notifications into asyncio.gather at the end.",
+    "server.py line 1037: `if p.get('scorer_player_id') and p['scorer_player_id'] in scorer_ids` — scorer_ids is a list, O(n) lookup per prediction. Convert to set() once outside the async-for loop.",
+    "server.py line 1086-1093: scorer_name/motm_name lookup does one find_one per prediction create — fine today, but if a user edits their prediction repeatedly it's two round-trips every time. Cheap optimization: single aggregated $in lookup after validation.",
+    "server.py line 1015: scorer_ids = list(body.scorer_player_ids or []) — Pydantic default_factory=list already guarantees a list, so the `or []` is redundant. Minor.",
+    "server.py line 1058: notification message interpolates m['opponent'] which was fetched BEFORE the result update. Fine for opponent, but if admin edits opponent concurrently it may show stale data. Fetch again after update or pass opponent explicitly.",
+    "Scoring is non-idempotent-safe: re-running the SAME /result call does not re-score (filter points NOT EXISTS). Good. But editing the result (different final_home/away) does NOT re-score existing predictions. Admins who correct a score will have stale points. Document or add a 'force_rescore=true' query.",
+    "Carried over: StreakLeader still exposes username (friend-code) publicly; predictions_leaderboard pipeline has no tie-breaker; no GET /api/matches/{id} single-fetch endpoint."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_cakmad_api.py (appended TestIter8MatchesShape x1, TestIter8LiveMatchShape x1, TestIter8PredictAuthGate x4, TestIter8AdminResultAuthGate x4, TestRegressionIter8 x7 — 17 new tests, total 157 PASSED)"
+  ],
+  "success_rate": {"backend": "100% (157/157)", "frontend": "not tested (backend-only run per request)"},
+  "seed_data_creation": "None. All iteration-8 tests hit public endpoints and 401 boundaries; no documents written to Mongo.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "To fully verify Iteration 8 end-to-end a valid Google session_id is required. Required flows: (1) auth as admin + 3 users. (2) Seed players (POST /api/admin/seed-players) and capture 3 player_ids p1, p2, p3. (3) POST /api/admin/matches with kickoff_at in future. (4) Each user POSTs /api/matches/{id}/predict with various combos: user1={pred_home:2,pred_away:1,scorer_player_id:p1,motm_player_id:p2} (exact+scorer+motm), user2={pred_home:3,pred_away:1,scorer_player_id:p3,motm_player_id:p1} (winner-only), user3={pred_home:0,pred_away:2,scorer_player_id:None,motm_player_id:None} (wrong winner, no bonuses). (5) GET /api/me/prediction/{id} returns each user's own prediction with scorer_name/motm_name populated from the players collection. (6) POST /api/admin/matches/{id}/result {final_home:2,final_away:1,scorer_player_ids:[p1,p3],motm_player_id:p2} → verify DB: user1 points = 300+150+200 = 650; user2 points = 100+150+0 = 250 (p3 scored, p1 not MOTM); user3 points = 0. (7) GET /api/predictions/leaderboard reflects the totals. (8) GET /api/matches response items include the stored scorer_player_ids list and motm_player_id. (9) Verify notifications pushed with 'tepat skor +300 · pencetak gol +150 · MOTM +200' message parts matching the earned bonuses. Known minor issues: no player_id validation on either /result or /predict, no re-score on edited result, scorer list dedup unclear — flagged for product decision.",
+  "rca_of_issue": "N/A — no failures. Iteration 8 extended-prediction surface is correctly wired: GET /api/matches exposes scorer_player_ids ([]) and motm_player_id (null) by default via _match_to_out; GET /api/live-match preserves the {live:false} fallback shape; POST /api/matches/{id}/predict and POST /api/admin/matches/{id}/result both accept the new optional fields and still return 401 missing_token / invalid_session when unauthenticated — meaning Pydantic validation of the extended body shape passes before Depends(get_current_user)/Depends(require_admin) rejects. All 7 iteration-8 features/boundaries from the review request plus the 7 regression endpoints are green."
+}

@@ -25,6 +25,16 @@ import { absolutePhotoUrl, type ApiPlayer } from "@/src/data/questions";
 const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;
 const POSITIONS: ("GK" | "DEF" | "MID" | "FWD")[] = ["GK", "DEF", "MID", "FWD"];
 
+type AdminMatch = {
+  match_id: string;
+  opponent: string;
+  kickoff_at: string;
+  home: boolean;
+  final_home?: number | null;
+  final_away?: number | null;
+  status: "upcoming" | "live" | "finished";
+};
+
 export default function AdminScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -40,6 +50,16 @@ export default function AdminScreen() {
   const [players, setPlayers] = useState<ApiPlayer[]>([]);
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
+  const [matches, setMatches] = useState<AdminMatch[]>([]);
+  const [mOpp, setMOpp] = useState("");
+  const [mDate, setMDate] = useState("");
+  const [mHome, setMHome] = useState(true);
+  const [mSubmitting, setMSubmitting] = useState(false);
+  const [resultOpen, setResultOpen] = useState<string | null>(null);
+  const [resH, setResH] = useState("");
+  const [resA, setResA] = useState("");
+  const [resScorerIds, setResScorerIds] = useState<string[]>([]);
+  const [resMotmId, setResMotmId] = useState<string | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -50,6 +70,12 @@ export default function AdminScreen() {
       setPlayers([]);
     } finally {
       setLoading(false);
+    }
+    try {
+      const ms = await api<AdminMatch[]>("/matches");
+      setMatches(ms);
+    } catch {
+      setMatches([]);
     }
   };
 
@@ -173,6 +199,77 @@ export default function AdminScreen() {
     } finally {
       setSeeding(false);
     }
+  };
+
+  const createMatch = async () => {
+    if (!mOpp.trim() || !mDate.trim()) {
+      setMsg({ kind: "err", txt: "Lawan dan tanggal wajib." });
+      return;
+    }
+    // Expect YYYY-MM-DDTHH:MM format in local time (treated as WIB → shift to UTC)
+    const dt = new Date(mDate);
+    if (isNaN(dt.getTime())) {
+      setMsg({ kind: "err", txt: "Format tanggal salah. Contoh: 2026-02-20T19:00" });
+      return;
+    }
+    setMSubmitting(true);
+    try {
+      await api("/admin/matches", {
+        method: "POST",
+        body: JSON.stringify({
+          opponent: mOpp.trim(),
+          kickoff_at: dt.toISOString(),
+          home: mHome,
+          competition: "Liga 1",
+        }),
+      });
+      setMsg({ kind: "ok", txt: "Jadwal tersimpan." });
+      setMOpp("");
+      setMDate("");
+      refresh();
+    } catch {
+      setMsg({ kind: "err", txt: "Gagal buat jadwal." });
+    } finally {
+      setMSubmitting(false);
+    }
+  };
+
+  const submitResult = async () => {
+    if (!resultOpen) return;
+    const h = parseInt(resH, 10);
+    const a = parseInt(resA, 10);
+    if (isNaN(h) || isNaN(a)) return;
+    try {
+      await api(`/admin/matches/${resultOpen}/result`, {
+        method: "POST",
+        body: JSON.stringify({
+          final_home: h,
+          final_away: a,
+          scorer_player_ids: resScorerIds,
+          motm_player_id: resMotmId,
+        }),
+      });
+      setMsg({ kind: "ok", txt: "Hasil tersimpan. Prediksi dinilai otomatis." });
+      setResultOpen(null);
+      setResH("");
+      setResA("");
+      setResScorerIds([]);
+      setResMotmId(null);
+      refresh();
+    } catch {
+      setMsg({ kind: "err", txt: "Gagal simpan hasil." });
+    }
+  };
+
+  const toggleScorer = (id: string) => {
+    setResScorerIds((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
+  };
+
+  const deleteMatch = async (id: string) => {
+    try {
+      await api(`/admin/matches/${id}`, { method: "DELETE" });
+      refresh();
+    } catch {}
   };
 
   return (
@@ -343,7 +440,171 @@ export default function AdminScreen() {
             </View>
           ))}
         </View>
+
+        {/* MATCHES ADMIN */}
+        <View style={styles.formCard}>
+          <Text style={styles.sectionLabel}>JADWAL PERTANDINGAN</Text>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Lawan</Text>
+            <TextInput
+              testID="match-opponent"
+              value={mOpp}
+              onChangeText={setMOpp}
+              placeholder="mis. Persija Jakarta"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Tanggal & Jam (WIB)</Text>
+            <TextInput
+              testID="match-date"
+              value={mDate}
+              onChangeText={setMDate}
+              placeholder="2026-02-20T19:00"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              autoCapitalize="none"
+            />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Kandang / Tandang</Text>
+            <View style={styles.posRow}>
+              <Pressable
+                testID="match-home"
+                onPress={() => setMHome(true)}
+                style={[styles.posChip, mHome && styles.posChipActive]}
+              >
+                <Text style={[styles.posTxt, mHome && styles.posTxtActive]}>HOME</Text>
+              </Pressable>
+              <Pressable
+                testID="match-away"
+                onPress={() => setMHome(false)}
+                style={[styles.posChip, !mHome && styles.posChipActive]}
+              >
+                <Text style={[styles.posTxt, !mHome && styles.posTxtActive]}>AWAY</Text>
+              </Pressable>
+            </View>
+          </View>
+          <Pressable
+            testID="submit-match-button"
+            onPress={createMatch}
+            disabled={mSubmitting}
+            style={[styles.cta, mSubmitting && { opacity: 0.5 }]}
+          >
+            {mSubmitting ? (
+              <ActivityIndicator color={colors.onBrandPrimary} />
+            ) : (
+              <>
+                <Ionicons name="calendar" size={18} color={colors.onBrandPrimary} />
+                <Text style={styles.ctaTxt}>TAMBAH JADWAL</Text>
+              </>
+            )}
+          </Pressable>
+        </View>
+
+        <View>
+          <Text style={styles.sectionLabel}>DAFTAR LAGA · {matches.length}</Text>
+          {matches.length === 0 && <Text style={styles.muted}>Belum ada jadwal.</Text>}
+          {matches.map((m) => {
+            const dt = new Date(m.kickoff_at);
+            return (
+              <View key={m.match_id} style={styles.playerRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.playerName}>
+                    {m.home ? "MU vs " + m.opponent : m.opponent + " vs MU"}
+                  </Text>
+                  <Text style={styles.playerMeta}>
+                    {m.status.toUpperCase()} · {dt.toLocaleDateString("id-ID")} {dt.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
+                    {m.final_home != null && ` · ${m.final_home}-${m.final_away}`}
+                  </Text>
+                </View>
+                {m.status !== "finished" && m.final_home == null && (
+                  <Pressable testID={`set-result-${m.match_id}`} onPress={() => setResultOpen(m.match_id)} hitSlop={8}>
+                    <Ionicons name="flag" size={20} color={colors.brandSecondary} />
+                  </Pressable>
+                )}
+                <Pressable testID={`delete-match-${m.match_id}`} onPress={() => deleteMatch(m.match_id)} hitSlop={8}>
+                  <Ionicons name="trash" size={20} color={colors.error} />
+                </Pressable>
+              </View>
+            );
+          })}
+        </View>
       </ScrollView>
+
+      {resultOpen && (
+        <Pressable style={styles.overlay} onPress={() => setResultOpen(null)}>
+          <Pressable onPress={(e) => e.stopPropagation()} style={styles.modal}>
+            <Text style={styles.modalTitle}>HASIL AKHIR</Text>
+            <View style={styles.scoreRow}>
+              <TextInput
+                testID="result-home"
+                keyboardType="number-pad"
+                value={resH}
+                onChangeText={setResH}
+                maxLength={2}
+                placeholder="0"
+                placeholderTextColor={colors.muted}
+                style={styles.scoreInput}
+              />
+              <Text style={styles.scoreDash}>–</Text>
+              <TextInput
+                testID="result-away"
+                keyboardType="number-pad"
+                value={resA}
+                onChangeText={setResA}
+                maxLength={2}
+                placeholder="0"
+                placeholderTextColor={colors.muted}
+                style={styles.scoreInput}
+              />
+            </View>
+
+            <Text style={styles.sectionLabel}>⚽ PENCETAK GOL (pilih bisa lebih dari satu)</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm as number }}>
+              {players.map((p) => {
+                const active = resScorerIds.includes(p.player_id);
+                return (
+                  <Pressable
+                    key={p.player_id}
+                    testID={`result-scorer-${p.player_id}`}
+                    onPress={() => toggleScorer(p.player_id)}
+                    style={[chipStyles.chip, active && chipStyles.chipActive]}
+                  >
+                    <Text style={chipStyles.chipTxt}>{p.name}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={styles.sectionLabel}>🏆 MAN OF THE MATCH</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm as number }}>
+              <Pressable
+                testID="result-motm-none"
+                onPress={() => setResMotmId(null)}
+                style={[chipStyles.chip, !resMotmId && chipStyles.chipActive]}
+              >
+                <Text style={chipStyles.chipTxt}>Tidak pilih</Text>
+              </Pressable>
+              {players.map((p) => (
+                <Pressable
+                  key={p.player_id}
+                  testID={`result-motm-${p.player_id}`}
+                  onPress={() => setResMotmId(p.player_id)}
+                  style={[chipStyles.chip, resMotmId === p.player_id && chipStyles.chipActive]}
+                >
+                  <Text style={chipStyles.chipTxt}>{p.name}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            <Pressable testID="submit-result" onPress={submitResult} style={styles.modalCta}>
+              <Text style={styles.modalCtaTxt}>SIMPAN & NILAI PREDIKSI</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -516,4 +777,56 @@ const styles = StyleSheet.create({
   toggleOn: { backgroundColor: colors.success },
   toggleOff: { backgroundColor: colors.surfaceTertiary, borderWidth: 1, borderColor: colors.border },
   muted: { color: colors.muted, fontSize: 13 },
+  overlay: {
+    position: "absolute",
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.75)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.lg,
+  },
+  modal: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.lg,
+    padding: spacing.xl,
+    gap: spacing.md as number,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+  },
+  modalTitle: { color: colors.onSurface, fontWeight: "900", fontSize: 16, letterSpacing: 2, textAlign: "center" },
+  scoreRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.md as number },
+  scoreInput: {
+    width: 80, height: 80,
+    backgroundColor: colors.surfaceTertiary,
+    borderRadius: radius.md,
+    color: colors.onSurface,
+    fontSize: 36, fontWeight: "900", textAlign: "center",
+    borderWidth: 1.5, borderColor: colors.border,
+  },
+  scoreDash: { color: colors.muted, fontSize: 32, fontWeight: "900" },
+  modalCta: {
+    backgroundColor: colors.brandPrimary,
+    paddingVertical: 14,
+    borderRadius: radius.md,
+    alignItems: "center",
+  },
+  modalCtaTxt: { color: colors.onBrandPrimary, fontWeight: "900", fontSize: 13, letterSpacing: 2 },
+});
+
+const chipStyles = StyleSheet.create({
+  chip: {
+    flexShrink: 0,
+    paddingHorizontal: spacing.md,
+    height: 36,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceTertiary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  chipActive: { borderColor: colors.brandSecondary, backgroundColor: colors.brandTertiary },
+  chipTxt: { color: colors.onSurface, fontSize: 12, fontWeight: "700" },
 });
