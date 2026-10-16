@@ -76,7 +76,11 @@ export default function Home() {
         <View style={styles.topBar}>
           <View style={styles.brandRow}>
             <View style={[styles.logoBadge, { backgroundColor: accent.primary }]}>
-              <Text style={[styles.logoText, { color: accent.onPrimary }]}>CM</Text>
+              <Image
+                source={require("@/assets/images/icon.png")}
+                style={styles.logoImg}
+                contentFit="cover"
+              />
             </View>
             <View>
               <Text style={styles.brandTitle}>CAK MAD QUIZ</Text>
@@ -325,6 +329,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     letterSpacing: 1,
   },
+  logoImg: { width: 44, height: 44 },
   brandTitle: {
     color: colors.onSurface,
     fontWeight: "900",

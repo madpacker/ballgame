@@ -29,7 +29,11 @@ export default function Login() {
 
         <View style={styles.heroBlock}>
           <View style={styles.logo}>
-            <Text style={styles.logoTxt}>CM</Text>
+            <Image
+              source={require("@/assets/images/icon.png")}
+              style={{ width: 56, height: 56 }}
+              contentFit="cover"
+            />
           </View>
           <Text style={styles.title}>MASUK KE CAK MAD QUIZ</Text>
           <Text style={styles.sub}>
