@@ -1216,6 +1216,235 @@ async def challenges_complete(
     return {"ok": True, "beat": beat, "score_to_beat": doc["score_to_beat"]}
 
 
+# ---------- App settings (background + socials + description) ----------
+class SocialLinks(BaseModel):
+    instagram: Optional[str] = None
+    tiktok: Optional[str] = None
+    whatsapp: Optional[str] = None
+    youtube: Optional[str] = None
+
+
+class AppSettingsOut(BaseModel):
+    background_url: Optional[str] = None
+    description: Optional[str] = None
+    socials: SocialLinks = Field(default_factory=SocialLinks)
+
+
+class AppSettingsIn(BaseModel):
+    description: Optional[str] = None
+    socials: Optional[SocialLinks] = None
+
+
+async def _load_app_settings() -> dict:
+    doc = await db.app_settings.find_one({"_key": "public"}, {"_id": 0})
+    return doc or {}
+
+
+def _settings_to_out(doc: dict) -> AppSettingsOut:
+    socials = doc.get("socials") or {}
+    return AppSettingsOut(
+        background_url=doc.get("background_url"),
+        description=doc.get("description"),
+        socials=SocialLinks(**socials),
+    )
+
+
+@api_router.get("/app-settings", response_model=AppSettingsOut)
+async def get_app_settings():
+    return _settings_to_out(await _load_app_settings())
+
+
+@api_router.put("/admin/app-settings", response_model=AppSettingsOut)
+async def set_app_settings(body: AppSettingsIn, user: dict = Depends(require_admin)):
+    update: dict = {}
+    if body.description is not None:
+        update["description"] = body.description.strip()
+    if body.socials is not None:
+        update["socials"] = {
+            "instagram": (body.socials.instagram or "").strip() or None,
+            "tiktok": (body.socials.tiktok or "").strip() or None,
+            "whatsapp": (body.socials.whatsapp or "").strip() or None,
+            "youtube": (body.socials.youtube or "").strip() or None,
+        }
+    if update:
+        update["updated_at"] = datetime.now(timezone.utc)
+        update["updated_by"] = user["user_id"]
+        await db.app_settings.update_one(
+            {"_key": "public"},
+            {"$set": {"_key": "public", **update}},
+            upsert=True,
+        )
+    return _settings_to_out(await _load_app_settings())
+
+
+@api_router.post("/admin/app-settings/background", response_model=AppSettingsOut)
+async def upload_background(
+    image: UploadFile = File(...),
+    user: dict = Depends(require_admin),
+):
+    content = await image.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty_image")
+    ext = (image.filename or "bg.jpg").rsplit(".", 1)[-1].lower()
+    if ext not in ("jpg", "jpeg", "png", "webp", "heic"):
+        ext = "jpg"
+    path = f"{APP_NAME}/uploads/{user['user_id']}/bg_{uuid.uuid4().hex[:8]}.{ext}"
+    try:
+        await run_in_threadpool(put_object, path, content, image.content_type or f"image/{ext}")
+    except Exception as e:
+        logger.exception("bg upload failed: %s", e)
+        raise HTTPException(status_code=500, detail="bg_upload_failed")
+    url = f"/api/files/{path}"
+    await db.app_settings.update_one(
+        {"_key": "public"},
+        {"$set": {"_key": "public", "background_url": url, "updated_at": datetime.now(timezone.utc), "updated_by": user["user_id"]}},
+        upsert=True,
+    )
+    return _settings_to_out(await _load_app_settings())
+
+
+@api_router.delete("/admin/app-settings/background", response_model=AppSettingsOut)
+async def delete_background(user: dict = Depends(require_admin)):
+    await db.app_settings.update_one(
+        {"_key": "public"},
+        {"$set": {"background_url": None, "updated_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    return _settings_to_out(await _load_app_settings())
+
+
+# ---------- News (artikel update Madura United) ----------
+class NewsOut(BaseModel):
+    news_id: str
+    title: str
+    excerpt: Optional[str] = None
+    body: str
+    cover_url: Optional[str] = None
+    author_name: Optional[str] = None
+    author_picture: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+def _news_doc_to_out(d: dict) -> NewsOut:
+    return NewsOut(
+        news_id=d["news_id"],
+        title=d["title"],
+        excerpt=d.get("excerpt"),
+        body=d["body"],
+        cover_url=d.get("cover_url"),
+        author_name=d.get("author_name"),
+        author_picture=d.get("author_picture"),
+        created_at=d["created_at"],
+        updated_at=d.get("updated_at"),
+    )
+
+
+@api_router.get("/news", response_model=List[NewsOut])
+async def news_list(limit: int = 50):
+    cursor = (
+        db.news.find({"deleted_at": {"$exists": False}}, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    results: List[NewsOut] = []
+    async for d in cursor:
+        results.append(_news_doc_to_out(d))
+    return results
+
+
+@api_router.get("/news/{news_id}", response_model=NewsOut)
+async def news_get(news_id: str):
+    doc = await db.news.find_one(
+        {"news_id": news_id, "deleted_at": {"$exists": False}}, {"_id": 0}
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="news_not_found")
+    return _news_doc_to_out(doc)
+
+
+def _make_excerpt(body: str, limit: int = 160) -> str:
+    body = (body or "").strip().replace("\r\n", "\n")
+    one = " ".join(body.split())
+    return one[:limit] + ("…" if len(one) > limit else "")
+
+
+@api_router.post("/admin/news", response_model=NewsOut)
+async def news_create(
+    title: str = Form(...),
+    body: str = Form(...),
+    cover: Optional[UploadFile] = File(None),
+    user: dict = Depends(require_admin),
+):
+    title = title.strip()
+    body = body.strip()
+    if not title or not body:
+        raise HTTPException(status_code=422, detail="missing_fields")
+    news_id = f"nw_{uuid.uuid4().hex[:12]}"
+    cover_url = None
+    if cover is not None:
+        content = await cover.read()
+        if content:
+            ext = (cover.filename or "cover.jpg").rsplit(".", 1)[-1].lower()
+            if ext not in ("jpg", "jpeg", "png", "webp", "heic"):
+                ext = "jpg"
+            path = f"{APP_NAME}/uploads/{user['user_id']}/news_{news_id}.{ext}"
+            try:
+                await run_in_threadpool(put_object, path, content, cover.content_type or f"image/{ext}")
+                cover_url = f"/api/files/{path}"
+            except Exception as e:
+                logger.exception("news cover upload failed: %s", e)
+                raise HTTPException(status_code=500, detail="cover_upload_failed")
+    now = datetime.now(timezone.utc)
+    doc = {
+        "news_id": news_id,
+        "title": title,
+        "body": body,
+        "excerpt": _make_excerpt(body),
+        "cover_url": cover_url,
+        "author_id": user["user_id"],
+        "author_name": user.get("name"),
+        "author_picture": user.get("picture"),
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.news.insert_one(doc)
+    return _news_doc_to_out(doc)
+
+
+class NewsUpdateIn(BaseModel):
+    title: Optional[str] = None
+    body: Optional[str] = None
+
+
+@api_router.put("/admin/news/{news_id}", response_model=NewsOut)
+async def news_update(news_id: str, body_in: NewsUpdateIn, user: dict = Depends(require_admin)):
+    existing = await db.news.find_one({"news_id": news_id, "deleted_at": {"$exists": False}}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="news_not_found")
+    update: dict = {}
+    if body_in.title is not None:
+        update["title"] = body_in.title.strip()
+    if body_in.body is not None:
+        update["body"] = body_in.body.strip()
+        update["excerpt"] = _make_excerpt(body_in.body)
+    if update:
+        update["updated_at"] = datetime.now(timezone.utc)
+        await db.news.update_one({"news_id": news_id}, {"$set": update})
+    doc = await db.news.find_one({"news_id": news_id}, {"_id": 0})
+    return _news_doc_to_out(doc)
+
+
+@api_router.delete("/admin/news/{news_id}")
+async def news_delete(news_id: str, user: dict = Depends(require_admin)):
+    res = await db.news.update_one(
+        {"news_id": news_id}, {"$set": {"deleted_at": datetime.now(timezone.utc)}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="news_not_found")
+    return {"ok": True}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -1264,6 +1493,8 @@ async def startup_indexes():
         await db.matches.create_index([("kickoff_at", -1)])
         await db.predictions.create_index([("user_id", 1), ("match_id", 1)], unique=True)
         await db.predictions.create_index("match_id")
+        await db.news.create_index("news_id", unique=True)
+        await db.news.create_index([("created_at", -1)])
     except Exception as e:
         logger.warning("index creation issue: %s", e)
 

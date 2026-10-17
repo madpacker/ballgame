@@ -1,0 +1,53 @@
+{
+  "summary": "Iteration 9: tested the quiz scoring bug fix (end-to-end via Playwright) AND the three new backend domains — app-settings (background/socials/description) and news CRUD. Quiz scoring: played Classic 10-question quizzes twice back-to-back, in each run clicking the correct option for all 10 questions (resolved from React fiber by matching DOM question-prompt text to the queue's Question.prompt). Both runs showed exactly score=1000, correct=10, total=10 on /result, with no stale carry-over between games. The stale-closure bug (score frozen at 900 / correct=9) is FIXED. Backend: added /app/backend/tests/test_iter9_settings_news.py with 19 pytest tests covering GET /api/app-settings public shape, admin PUT with description+socials round-trip, POST /api/admin/app-settings/background multipart + GET /api/files/ byte serving + GET /api/app-settings reflecting it, DELETE background clearing to null, full news CRUD (POST→GET list→GET detail→PUT→DELETE→GET 404), excerpt auto-generation (≤160 chars + ellipsis), and auth gating (missing/invalid bearer → 401, non-admin bearer → 403). 19/19 PASS. Full regression suite: 176/176 PASS (157 prior + 19 new). Admin bearer was seeded directly into Mongo users+user_sessions (first-admin bootstrap in app meant live admin bearer not disturbed). News list screen smoke-rendered on public /news with the saved admin description/socials visible under TENTANG ADMIN card.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/admin/app-settings", "issue": "No URL validation on socials.instagram/tiktok/youtube/whatsapp — accepts any string including non-URL. Consider pydantic HttpUrl or regex per platform."},
+      {"endpoint": "POST /api/admin/app-settings/background", "issue": "No max file size / dimension enforcement; a 50MB upload would be stored and served. Add Content-Length guard + size cap (e.g. 5MB)."},
+      {"endpoint": "DELETE /api/admin/app-settings/background", "issue": "Only clears the URL in app_settings but does NOT delete the underlying object in Emergent storage. Storage will leak old backgrounds over time."},
+      {"endpoint": "POST /api/admin/news", "issue": "cover image orphaned on failure: if DB insert fails after a successful put_object, the file is never cleaned up. Low-risk since the only failure mode is a DB write error."},
+      {"endpoint": "DELETE /api/admin/news/{id}", "issue": "Soft delete only; cover_url object is not deleted. Same storage leak as background on repeated edits."},
+      {"endpoint": "PUT /api/admin/news/{id}", "issue": "No way to update cover image — only title/body. Admin must delete + recreate the article to change the cover."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "pointerEvents prop usage", "issue": "Console warning: 'props.pointerEvents is deprecated. Use style.pointerEvents'. Triggered on the Quiz screen flash overlay. Reference: /app/frontend/app/quiz.tsx:282 (Animated.View pointerEvents=\"none\"). Move pointerEvents into style object."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter9_settings_news.py",
+    "/app/backend/tests/test_cakmad_api.py",
+    "/app/test_reports/pytest/pytest_iter9.xml",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix minor: move pointerEvents=\"none\" from prop to style on the flash overlay in /app/frontend/app/quiz.tsx (line 282) — currently emits a deprecation warning.",
+    "Consider URL validation on PUT /api/admin/app-settings socials fields (currently any string accepted).",
+    "Consider cleaning up Emergent storage objects when DELETE /api/admin/app-settings/background or DELETE /api/admin/news (and on PUT cover replace, when added) — currently leaks blobs.",
+    "Consider adding cover-image update support to PUT /api/admin/news/{id}; today admin must delete + recreate the article to replace the cover.",
+    "Add max upload size guard on POST /api/admin/app-settings/background and POST /api/admin/news to prevent abusive uploads.",
+    "Carried over (from iter 8): split server.py (now 1510 lines) into routers — news/app-settings makes it even larger."
+  ],
+  "critical_code_review_comments": [
+    "/app/frontend/app/quiz.tsx line 85: total passed to /result is computed as `useCorrect + (useIndex - useCorrect)` for classic mode fallback — this equals useIndex, so you could just pass CLASSIC_COUNT for classic and useIndex for TA. Minor readability — current code is correct though.",
+    "/app/frontend/app/result.tsx: total is clamped with Math.max(parseInt(total), correct) which hides bugs where total < correct. Fine as a defensive guard, but a mismatched URL state would be silently masked.",
+    "/app/backend/server.py line 1261-1268: PUT /api/admin/app-settings strips+empties socials to None but still writes the socials sub-doc as a full object — fine, but a client wanting to clear ALL four would send empty strings and get back {instagram:null, tiktok:null, ...}, which is what AppSettingsOut expects. Correct.",
+    "/app/backend/server.py line 1366-1369: _make_excerpt uses body.split() + join(' ') — this strips multi-line formatting from the preview. OK for excerpt but confirm with product it's intended.",
+    "/app/backend/server.py line 1497: db.news.create_index on created_at only; no index on 'deleted_at' or compound (deleted_at, created_at). News list query filters deleted_at then sorts by created_at — add compound index for scale.",
+    "/app/backend/server.py: app.on_event('startup' / 'shutdown') is deprecated in FastAPI; use lifespan context manager. Low priority but will break on FastAPI 1.0."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter9_settings_news.py (new, 19 tests, all PASS)"
+  ],
+  "success_rate": {"backend": "100% (176/176 total; 19/19 new)", "frontend": "quiz-scoring-fix PASS end-to-end (2 consecutive 10/10 → 1000), /news public screen renders admin description+socials correctly"},
+  "seed_data_creation": "Transient: fixture seeds one admin user + one non-admin user with bearer tokens directly in Mongo (users + user_sessions collections, prefixed TEST_iter9_). The admin fixture also writes/deletes app_settings and news docs during the flow. All fixtures tear down their data at module scope — final GET /api/app-settings showed the admin's description+socials remained because the PUT ran after cleanup wasn't scheduled for app_settings (singleton doc). Not blocking; main agent may want to reset app_settings to {} after this iteration if desired.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The quiz scoring fix is verified. To re-verify: GET /quiz?mode=classic&category=all, wait for progress-text to show 'Qn/10' for each n, resolve correct option via React fiber lookup by matching queue[*].prompt to document.querySelector('[data-testid=\"question-prompt\"]').innerText — click option-{answerIndex}, repeat for 10 questions, assert /result URL has score=1000, correct=10, total=10 and [data-testid=\"final-score\"] shows '1000'. Then goto quiz again and repeat to verify no carry-over. For admin frontend smoke (/admin), /profile, authenticated /news flows: the test needs a logged-in session. Simulate by inserting an admin user + session in Mongo and setting localStorage key 'cakmad.session_token' to the token BEFORE navigating. Backend: 176/176 pytest green. app_settings doc currently has 'TEST_Iter9 Cak Mad admin' description + four TEST_ social links from the testing run — main agent may want to clear via DELETE / PUT if they want pristine state.",
+  "rca_of_issue": "ROOT CAUSE (quiz scoring): choose() scheduled a setTimeout(..., 900) that called finish() inside a stale closure capturing old `score` and `correctCount` React state (because setState batched updates had not yet propagated to the closure variables, and the finish() navigation then read the stale closure values). The fix in /app/frontend/app/quiz.tsx line 72-89 is to accept explicit finalScore/finalCorrect parameters: `finish(nextScore, nextCorrect)` on the final question, where nextScore=score+100 and nextCorrect=correctCount+1 are computed synchronously inside choose(). It also keeps scoreRef/correctRef/indexRef updated synchronously so the Time Attack timer fallback (which can't pass params) reads fresh values. REPRO (pre-fix): play Classic, answer all 10 correctly, observe result shows 9/900 (the state values captured at setTimeout schedule time were from BEFORE the final choose()'s setState batch resolved). Playing again carried over the 900 because the stale closure captured the previous component's state via setTimeout but setScore(nextScore) worked in isolation. VERIFIED FIX: 2 consecutive 10/10 classic runs both show score=1000, correct=10, total=10 with no stale carry-over."
+}

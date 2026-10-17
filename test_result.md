@@ -101,3 +101,159 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  Bug: Setiap kali main quiz, hasil akhir selalu tampil "9 benar / 10" dan skor stuck di 900,
+  padahal pemain menjawab semua pertanyaan dengan benar. Juga skor tidak bertambah di game berikutnya.
+
+  Fitur baru yang baru dibangun:
+  1. Admin bisa mengubah background game (upload gambar global untuk semua user; tampil di Home & Quiz).
+  2. Halaman "Berita Update" (list + detail) — admin bisa posting berita dengan judul, cover image, body;
+     user bisa melihat list dan detail dengan pull-to-refresh.
+  3. Deskripsi + media sosial admin (Instagram, TikTok, WhatsApp, YouTube) yang bisa diedit lewat
+     dashboard admin; tombol link dapat dibuka di Profil & halaman Berita.
+
+backend:
+  - task: "App Settings endpoints (background + socials + description)"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added GET /api/app-settings (public), PUT /api/admin/app-settings (JSON body with
+          description + socials), POST /api/admin/app-settings/background (multipart `image`
+          upload via Emergent Object Storage), DELETE /api/admin/app-settings/background.
+          Admin auth is required for write endpoints. Settings persist in `app_settings`
+          collection under `_key: "public"`.
+  - task: "News CRUD endpoints"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added GET /api/news (public list), GET /api/news/{id} (public detail),
+          POST /api/admin/news (multipart title/body/cover) with cover upload to Emergent
+          Object Storage, PUT /api/admin/news/{id}, DELETE /api/admin/news/{id} (soft
+          delete). Server auto-generates `excerpt` from body (first 160 chars).
+
+frontend:
+  - task: "Fix quiz scoring bug: stale state in finish()"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/quiz.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          User reported: after answering all 10 classic questions correctly, result screen
+          always shows "9 benar / 10" and score stuck at 900; next game shows the same.
+          Root cause: `choose()` scheduled `setScore`/`setCorrectCount` and then called
+          `finish()` 900ms later via setTimeout. The setTimeout captured the OLD `finish`
+          closure (with stale `score`/`correctCount` from the render BEFORE the last
+          answer). Fix: compute `nextScore`/`nextCorrect` synchronously inside `choose`,
+          pass them to `finish(finalScore, finalCorrect)` as explicit args; also keep
+          `scoreRef`/`correctRef`/`indexRef` mirrors so the Time Attack timer callback
+          also reads the latest numbers.
+  - task: "News list & detail screens"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/news/index.tsx, frontend/app/news/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New `/news` route (FlatList + RefreshControl) with embedded admin "About" card
+          showing description + social buttons (IG / TikTok / WhatsApp / YouTube) that
+          open via Linking.openURL. `/news/[id]` renders cover image, title, author meta,
+          body, and native Share button. Added "Berita" shortcut on Home.
+  - task: "Admin dashboard: background + socials + news management"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/admin.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added three new form cards: (1) Background upload (16:9 picker + upload + reset);
+          (2) Info & Socials (description + IG/TikTok/WhatsApp/YouTube text inputs + Save);
+          (3) News composer (cover picker + title + body + publish) and inline news list
+          with view/delete.
+  - task: "Home & Quiz use admin-set background"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx, frontend/app/quiz.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Both Home hero image and the quiz background now use `absoluteFileUrl(settings.background_url)`
+          from `useAppSettings`; falls back to the stock stadium image when admin has not
+          uploaded a custom background.
+  - task: "Profile shows admin social links"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/profile.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added "Berita Update" link and an "IKUTI ADMIN" card with social buttons that
+          open the matching platform URL via expo-linking.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.1"
+  test_sequence: 9
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Fix quiz scoring bug: stale state in finish()"
+    - "App Settings endpoints (background + socials + description)"
+    - "News CRUD endpoints"
+    - "Admin dashboard: background + socials + news management"
+    - "News list & detail screens"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Please test (1) the quiz scoring bug fix end-to-end: play Classic mode via the UI,
+      answer all 10 questions correctly, and verify the result screen reports 10/10 and
+      1000 points, and that a second game accumulates its own fresh total.
+      (2) Test the new backend endpoints end-to-end: GET /api/app-settings (unauthed) ->
+      ok; PUT /api/admin/app-settings as admin -> socials + description persist; multipart
+      POST /api/admin/app-settings/background -> background_url returned & GET reflects it;
+      DELETE background -> cleared. News: POST /api/admin/news (multipart with cover) ->
+      returned doc has cover_url; GET /api/news lists it, GET /api/news/{id} returns full
+      body; DELETE soft-deletes it (list no longer contains it). Admin auth enforcement:
+      calling admin endpoints without a session or without is_admin should return 401/403.
+      Also please smoke-test the frontend screens: /news list + detail, /profile social
+      links, /admin new form cards.

@@ -18,6 +18,8 @@ import { CATEGORY_LABEL, pickQuestions, type Category, type Question } from "@/s
 import { pickDynamicQuestions, type ThemeFilter } from "@/src/data/questions";
 import { useCountdown } from "@/src/hooks/useCountdown";
 import { api } from "@/src/api";
+import { absoluteFileUrl, useAppSettings } from "@/src/hooks/useAppSettings";
+import { LinearGradient } from "expo-linear-gradient";
 
 type Mode = "classic" | "time_attack";
 type CatKey = Category | "all";
@@ -30,6 +32,8 @@ export default function QuizScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { accent } = useSkin();
+  const { settings } = useAppSettings();
+  const customBg = absoluteFileUrl(settings.background_url);
   const params = useLocalSearchParams<{ mode: Mode; category: CatKey; theme?: string }>();
   const mode = (params.mode ?? "classic") as Mode;
   const category = (params.category ?? "all") as CatKey;
@@ -47,26 +51,38 @@ export default function QuizScreen() {
 
   const flashOpacity = useSharedValue(0);
   const finishedRef = useRef(false);
+  const scoreRef = useRef(0);
+  const correctRef = useRef(0);
+  const indexRef = useRef(0);
 
   const current = queue[index];
   const totalPlanned = mode === "classic" ? CLASSIC_COUNT : queue.length;
+
+  // Keep refs in sync with latest state so finish() always reads fresh values
+  // even when called from stale closures (timeouts / timer callbacks).
+  scoreRef.current = score;
+  correctRef.current = correctCount;
+  indexRef.current = index;
 
   // Time attack countdown
   const timeLeft = useCountdown(TIME_SECONDS, mode === "time_attack", () => {
     if (!finishedRef.current) finish();
   });
 
-  const finish = () => {
+  const finish = (finalScore?: number, finalCorrect?: number) => {
     if (finishedRef.current) return;
     finishedRef.current = true;
+    const useScore = finalScore ?? scoreRef.current;
+    const useCorrect = finalCorrect ?? correctRef.current;
+    const useIndex = indexRef.current;
     router.replace({
       pathname: "/result",
       params: {
         mode,
         category,
-        score: String(score),
-        correct: String(correctCount),
-        total: String(mode === "classic" ? CLASSIC_COUNT : correctCount + (index - correctCount)),
+        score: String(useScore),
+        correct: String(useCorrect),
+        total: String(mode === "classic" ? CLASSIC_COUNT : useCorrect + (useIndex - useCorrect)),
         ...(params.challenge ? { challenge: String(params.challenge) } : {}),
       },
     });
@@ -83,9 +99,14 @@ export default function QuizScreen() {
     if (answered !== null) return;
     setAnswered(i);
     const correct = i === current.answerIndex;
+    const nextScore = correct ? score + POINT_PER_CORRECT : score;
+    const nextCorrect = correct ? correctCount + 1 : correctCount;
+    // Update refs immediately so TA timer / other timeouts see fresh values.
+    scoreRef.current = nextScore;
+    correctRef.current = nextCorrect;
     if (correct) {
-      setScore((s) => s + POINT_PER_CORRECT);
-      setCorrectCount((c) => c + 1);
+      setScore(nextScore);
+      setCorrectCount(nextCorrect);
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       flash("correct");
     } else {
@@ -97,7 +118,7 @@ export default function QuizScreen() {
       // Advance
       if (mode === "classic") {
         if (index + 1 >= CLASSIC_COUNT) {
-          finish();
+          finish(nextScore, nextCorrect);
         } else {
           setIndex((v) => v + 1);
           setAnswered(null);
@@ -154,6 +175,19 @@ export default function QuizScreen() {
 
   return (
     <View style={styles.container}>
+      {customBg && (
+        <>
+          <Image
+            source={customBg}
+            style={StyleSheet.absoluteFill}
+            contentFit="cover"
+          />
+          <LinearGradient
+            colors={["rgba(15,17,21,0.75)", "rgba(15,17,21,0.95)", colors.surface]}
+            style={StyleSheet.absoluteFill}
+          />
+        </>
+      )}
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <Pressable testID="quit-button" onPress={() => router.replace("/")} hitSlop={10} style={styles.closeBtn}>
           <Ionicons name="close" size={24} color={colors.onSurface} />
@@ -245,11 +279,11 @@ export default function QuizScreen() {
 
       {showFlash && (
         <Animated.View
-          pointerEvents="none"
           style={[
             StyleSheet.absoluteFill,
             flashStyle,
             {
+              pointerEvents: "none",
               backgroundColor:
                 showFlash === "correct" ? "rgba(46,125,50,0.35)" : "rgba(211,47,47,0.35)",
             },

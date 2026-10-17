@@ -21,6 +21,7 @@ import { useAuth } from "@/src/contexts/auth";
 import { api, getToken } from "@/src/api";
 import { uploadForm } from "@/src/utils/upload";
 import { absolutePhotoUrl, type ApiPlayer } from "@/src/data/questions";
+import { absoluteFileUrl, useAppSettings } from "@/src/hooks/useAppSettings";
 
 const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;
 const POSITIONS: ("GK" | "DEF" | "MID" | "FWD")[] = ["GK", "DEF", "MID", "FWD"];
@@ -33,6 +34,14 @@ type AdminMatch = {
   final_home?: number | null;
   final_away?: number | null;
   status: "upcoming" | "live" | "finished";
+};
+
+type AdminNews = {
+  news_id: string;
+  title: string;
+  excerpt?: string | null;
+  cover_url?: string | null;
+  created_at: string;
 };
 
 export default function AdminScreen() {
@@ -61,6 +70,32 @@ export default function AdminScreen() {
   const [resScorerIds, setResScorerIds] = useState<string[]>([]);
   const [resMotmId, setResMotmId] = useState<string | null>(null);
 
+  // Background / socials / description
+  const { settings, refresh: refreshSettings } = useAppSettings();
+  const [bgPhoto, setBgPhoto] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [bgSubmitting, setBgSubmitting] = useState(false);
+  const [descDraft, setDescDraft] = useState("");
+  const [igDraft, setIgDraft] = useState("");
+  const [tkDraft, setTkDraft] = useState("");
+  const [waDraft, setWaDraft] = useState("");
+  const [ytDraft, setYtDraft] = useState("");
+  const [infoSaving, setInfoSaving] = useState(false);
+
+  // News
+  const [news, setNews] = useState<AdminNews[]>([]);
+  const [newsTitle, setNewsTitle] = useState("");
+  const [newsBody, setNewsBody] = useState("");
+  const [newsCover, setNewsCover] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [newsSubmitting, setNewsSubmitting] = useState(false);
+
+  useEffect(() => {
+    setDescDraft(settings.description ?? "");
+    setIgDraft(settings.socials?.instagram ?? "");
+    setTkDraft(settings.socials?.tiktok ?? "");
+    setWaDraft(settings.socials?.whatsapp ?? "");
+    setYtDraft(settings.socials?.youtube ?? "");
+  }, [settings]);
+
   const refresh = async () => {
     setLoading(true);
     try {
@@ -76,6 +111,12 @@ export default function AdminScreen() {
       setMatches(ms);
     } catch {
       setMatches([]);
+    }
+    try {
+      const ns = await api<AdminNews[]>("/news");
+      setNews(ns);
+    } catch {
+      setNews([]);
     }
   };
 
@@ -268,6 +309,151 @@ export default function AdminScreen() {
   const deleteMatch = async (id: string) => {
     try {
       await api(`/admin/matches/${id}`, { method: "DELETE" });
+      refresh();
+    } catch {}
+  };
+
+  // ---- Background ----
+  const pickBg = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      setMsg({ kind: "err", txt: "Izin galeri ditolak." });
+      return;
+    }
+    const r = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.85,
+      allowsEditing: true,
+      aspect: [16, 9],
+    });
+    if (!r.canceled && r.assets[0]) setBgPhoto(r.assets[0]);
+  };
+
+  const uploadBg = async () => {
+    if (!bgPhoto) {
+      setMsg({ kind: "err", txt: "Pilih foto background dulu." });
+      return;
+    }
+    setBgSubmitting(true);
+    try {
+      const token = await getToken();
+      const res = await uploadForm(`${BACKEND}/api/admin/app-settings/background`, {
+        headers: { Authorization: `Bearer ${token}` },
+        files: {
+          image: {
+            uri: bgPhoto.uri,
+            name: bgPhoto.fileName || `bg_${Date.now()}.jpg`,
+            mimeType: bgPhoto.mimeType || "image/jpeg",
+          },
+        } as any,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setMsg({ kind: "ok", txt: "Background diperbarui." });
+      setBgPhoto(null);
+      await refreshSettings();
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      setMsg({ kind: "err", txt: "Gagal upload background." });
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setBgSubmitting(false);
+    }
+  };
+
+  const clearBg = async () => {
+    try {
+      await api("/admin/app-settings/background", { method: "DELETE" });
+      await refreshSettings();
+      setMsg({ kind: "ok", txt: "Background dikembalikan ke default." });
+    } catch {
+      setMsg({ kind: "err", txt: "Gagal hapus background." });
+    }
+  };
+
+  // ---- Socials & description ----
+  const saveInfo = async () => {
+    setInfoSaving(true);
+    try {
+      await api("/admin/app-settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          description: descDraft.trim(),
+          socials: {
+            instagram: igDraft.trim(),
+            tiktok: tkDraft.trim(),
+            whatsapp: waDraft.trim(),
+            youtube: ytDraft.trim(),
+          },
+        }),
+      });
+      await refreshSettings();
+      setMsg({ kind: "ok", txt: "Info admin tersimpan." });
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      setMsg({ kind: "err", txt: "Gagal simpan info admin." });
+    } finally {
+      setInfoSaving(false);
+    }
+  };
+
+  // ---- News ----
+  const pickNewsCover = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      setMsg({ kind: "err", txt: "Izin galeri ditolak." });
+      return;
+    }
+    const r = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.85,
+      allowsEditing: true,
+      aspect: [16, 9],
+    });
+    if (!r.canceled && r.assets[0]) setNewsCover(r.assets[0]);
+  };
+
+  const submitNews = async () => {
+    if (!newsTitle.trim() || !newsBody.trim()) {
+      setMsg({ kind: "err", txt: "Judul dan isi berita wajib." });
+      return;
+    }
+    setNewsSubmitting(true);
+    try {
+      const token = await getToken();
+      const files = newsCover
+        ? {
+            cover: {
+              uri: newsCover.uri,
+              name: newsCover.fileName || `cover_${Date.now()}.jpg`,
+              mimeType: newsCover.mimeType || "image/jpeg",
+            },
+          }
+        : {};
+      const res = await uploadForm(`${BACKEND}/api/admin/news`, {
+        headers: { Authorization: `Bearer ${token}` },
+        fields: {
+          title: newsTitle.trim(),
+          body: newsBody.trim(),
+        },
+        files: files as any,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setMsg({ kind: "ok", txt: "Berita terbit!" });
+      setNewsTitle("");
+      setNewsBody("");
+      setNewsCover(null);
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      refresh();
+    } catch {
+      setMsg({ kind: "err", txt: "Gagal menerbitkan berita." });
+    } finally {
+      setNewsSubmitting(false);
+    }
+  };
+
+  const deleteNews = async (id: string) => {
+    try {
+      await api(`/admin/news/${id}`, { method: "DELETE" });
       refresh();
     } catch {}
   };
@@ -531,6 +717,224 @@ export default function AdminScreen() {
             );
           })}
         </View>
+
+        {/* BACKGROUND */}
+        <View style={styles.formCard}>
+          <Text style={styles.sectionLabel}>BACKGROUND APLIKASI</Text>
+          <Pressable testID="pick-bg-button" onPress={pickBg} style={styles.photoPicker}>
+            {bgPhoto ? (
+              <Image source={bgPhoto.uri} style={styles.photoPreview} />
+            ) : settings.background_url ? (
+              <Image source={absoluteFileUrl(settings.background_url) || ""} style={styles.photoPreview} />
+            ) : (
+              <View style={styles.photoPlaceholder}>
+                <Ionicons name="image" size={32} color={colors.muted} />
+                <Text style={styles.photoHint}>Pilih gambar background (16:9)</Text>
+              </View>
+            )}
+          </Pressable>
+          <Text style={styles.helpText}>
+            Background ini akan tampil di halaman utama dan quiz untuk semua pengguna.
+          </Text>
+          <View style={{ flexDirection: "row", gap: spacing.sm as number }}>
+            <Pressable
+              testID="upload-bg-button"
+              onPress={uploadBg}
+              disabled={!bgPhoto || bgSubmitting}
+              style={[styles.cta, { flex: 1 }, (!bgPhoto || bgSubmitting) && { opacity: 0.5 }]}
+            >
+              {bgSubmitting ? (
+                <ActivityIndicator color={colors.onBrandPrimary} />
+              ) : (
+                <>
+                  <Ionicons name="cloud-upload" size={16} color={colors.onBrandPrimary} />
+                  <Text style={styles.ctaTxt}>UPLOAD</Text>
+                </>
+              )}
+            </Pressable>
+            {settings.background_url && (
+              <Pressable
+                testID="clear-bg-button"
+                onPress={clearBg}
+                style={[styles.ctaSecondary, { flex: 1 }]}
+              >
+                <Ionicons name="trash-outline" size={16} color={colors.error} />
+                <Text style={styles.ctaSecondaryTxt}>RESET</Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
+
+        {/* ADMIN INFO & SOCIALS */}
+        <View style={styles.formCard}>
+          <Text style={styles.sectionLabel}>INFO & MEDIA SOSIAL ADMIN</Text>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Deskripsi (ditampilkan di Berita & Profil)</Text>
+            <TextInput
+              testID="desc-input"
+              value={descDraft}
+              onChangeText={setDescDraft}
+              placeholder="mis. Admin resmi Cak Mad Quiz, update harian Madura United."
+              placeholderTextColor={colors.muted}
+              multiline
+              style={[styles.input, { minHeight: 72, textAlignVertical: "top" }]}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Instagram (username atau URL)</Text>
+            <TextInput
+              testID="ig-input"
+              value={igDraft}
+              onChangeText={setIgDraft}
+              placeholder="@maduraunited"
+              placeholderTextColor={colors.muted}
+              autoCapitalize="none"
+              style={styles.input}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>TikTok (username atau URL)</Text>
+            <TextInput
+              testID="tk-input"
+              value={tkDraft}
+              onChangeText={setTkDraft}
+              placeholder="@maduraunited"
+              placeholderTextColor={colors.muted}
+              autoCapitalize="none"
+              style={styles.input}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>WhatsApp (nomor dengan kode negara)</Text>
+            <TextInput
+              testID="wa-input"
+              value={waDraft}
+              onChangeText={setWaDraft}
+              placeholder="628123456789"
+              placeholderTextColor={colors.muted}
+              keyboardType="phone-pad"
+              style={styles.input}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>YouTube (handle atau URL)</Text>
+            <TextInput
+              testID="yt-input"
+              value={ytDraft}
+              onChangeText={setYtDraft}
+              placeholder="@maduraunited"
+              placeholderTextColor={colors.muted}
+              autoCapitalize="none"
+              style={styles.input}
+            />
+          </View>
+          <Pressable
+            testID="save-info-button"
+            onPress={saveInfo}
+            disabled={infoSaving}
+            style={[styles.cta, infoSaving && { opacity: 0.5 }]}
+          >
+            {infoSaving ? (
+              <ActivityIndicator color={colors.onBrandPrimary} />
+            ) : (
+              <>
+                <Ionicons name="save" size={18} color={colors.onBrandPrimary} />
+                <Text style={styles.ctaTxt}>SIMPAN INFO</Text>
+              </>
+            )}
+          </Pressable>
+        </View>
+
+        {/* NEWS */}
+        <View style={styles.formCard}>
+          <Text style={styles.sectionLabel}>POSTING BERITA BARU</Text>
+          <Pressable testID="pick-news-cover" onPress={pickNewsCover} style={styles.photoPicker}>
+            {newsCover ? (
+              <Image source={newsCover.uri} style={styles.photoPreview} />
+            ) : (
+              <View style={styles.photoPlaceholder}>
+                <Ionicons name="image" size={32} color={colors.muted} />
+                <Text style={styles.photoHint}>Pilih foto sampul (opsional)</Text>
+              </View>
+            )}
+          </Pressable>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Judul</Text>
+            <TextInput
+              testID="news-title-input"
+              value={newsTitle}
+              onChangeText={setNewsTitle}
+              placeholder="Judul berita"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Isi Artikel</Text>
+            <TextInput
+              testID="news-body-input"
+              value={newsBody}
+              onChangeText={setNewsBody}
+              placeholder="Tulis update berita di sini..."
+              placeholderTextColor={colors.muted}
+              multiline
+              style={[styles.input, { minHeight: 160, textAlignVertical: "top" }]}
+            />
+          </View>
+          <Pressable
+            testID="submit-news-button"
+            onPress={submitNews}
+            disabled={newsSubmitting}
+            style={[styles.cta, newsSubmitting && { opacity: 0.5 }]}
+          >
+            {newsSubmitting ? (
+              <ActivityIndicator color={colors.onBrandPrimary} />
+            ) : (
+              <>
+                <Ionicons name="send" size={18} color={colors.onBrandPrimary} />
+                <Text style={styles.ctaTxt}>TERBITKAN BERITA</Text>
+              </>
+            )}
+          </Pressable>
+        </View>
+
+        <View>
+          <Text style={styles.sectionLabel}>SEMUA BERITA · {news.length}</Text>
+          {news.length === 0 && <Text style={styles.muted}>Belum ada berita.</Text>}
+          {news.map((n) => (
+            <View key={n.news_id} style={styles.playerRow}>
+              {n.cover_url ? (
+                <Image source={absoluteFileUrl(n.cover_url) || ""} style={styles.newsThumb} />
+              ) : (
+                <View style={[styles.newsThumb, styles.playerAvatarFallback]}>
+                  <Ionicons name="newspaper" size={18} color={colors.muted} />
+                </View>
+              )}
+              <View style={{ flex: 1 }}>
+                <Text numberOfLines={2} style={styles.playerName}>
+                  {n.title}
+                </Text>
+                <Text style={styles.playerMeta}>
+                  {new Date(n.created_at).toLocaleDateString("id-ID", {
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric",
+                  })}
+                </Text>
+              </View>
+              <Pressable
+                testID={`view-news-${n.news_id}`}
+                onPress={() => router.push({ pathname: "/news/[id]", params: { id: n.news_id } })}
+                hitSlop={8}
+              >
+                <Ionicons name="eye-outline" size={20} color={colors.brandSecondary} />
+              </Pressable>
+              <Pressable testID={`delete-news-${n.news_id}`} onPress={() => deleteNews(n.news_id)} hitSlop={8}>
+                <Ionicons name="trash" size={20} color={colors.error} />
+              </Pressable>
+            </View>
+          ))}
+        </View>
       </ScrollView>
 
       {resultOpen && (
@@ -755,6 +1159,24 @@ const styles = StyleSheet.create({
     gap: spacing.sm as number,
   },
   ctaTxt: { color: colors.onBrandPrimary, fontWeight: "900", fontSize: 14, letterSpacing: 2 },
+  ctaSecondary: {
+    borderWidth: 1,
+    borderColor: colors.error,
+    borderRadius: radius.lg,
+    paddingVertical: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm as number,
+  },
+  ctaSecondaryTxt: { color: colors.error, fontWeight: "900", fontSize: 13, letterSpacing: 1.5 },
+  helpText: { color: colors.muted, fontSize: 11, lineHeight: 16 },
+  newsThumb: {
+    width: 56,
+    height: 44,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceTertiary,
+  },
   playerRow: {
     flexDirection: "row",
     alignItems: "center",

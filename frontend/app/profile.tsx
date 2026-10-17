@@ -12,6 +12,9 @@ import { useAuth } from "@/src/contexts/auth";
 import { useSkin, SKINS, type SkinKey } from "@/src/contexts/skin";
 import { getLocalHigh, type LocalHigh } from "@/src/storage/localHigh";
 import { api } from "@/src/api";
+import { useAppSettings } from "@/src/hooks/useAppSettings";
+import { socialUrlFor, socialLabelFor, type SocialPlatform } from "@/src/utils/socials";
+import * as Linking from "expo-linking";
 
 type Badge = {
   badge_id: string;
@@ -26,6 +29,7 @@ export default function Profile() {
   const router = useRouter();
   const { user, signOut } = useAuth();
   const { skin, setSkin, championUnlocked, championUntil } = useSkin();
+  const { settings } = useAppSettings();
   const [high, setHigh] = useState<LocalHigh>({ classic: 0, time_attack: 0 });
   const [badges, setBadges] = useState<Badge[]>([]);
 
@@ -173,6 +177,61 @@ export default function Profile() {
                   <Text style={styles.badgeScore}>{b.score}</Text>
                 </View>
               ))}
+            </View>
+          </View>
+        )}
+
+        <Pressable
+          testID="news-link"
+          onPress={() => router.push("/news")}
+          style={styles.linkRow}
+        >
+          <Ionicons name="newspaper" size={22} color={colors.brandSecondary} />
+          <Text style={styles.linkTxt}>Berita Update</Text>
+          <Ionicons name="chevron-forward" size={20} color={colors.muted} />
+        </Pressable>
+
+        {(settings.description ||
+          !!settings.socials?.instagram ||
+          !!settings.socials?.tiktok ||
+          !!settings.socials?.whatsapp ||
+          !!settings.socials?.youtube) && (
+          <View style={styles.socialCard}>
+            <Text style={styles.skinLabel}>IKUTI ADMIN</Text>
+            {settings.description ? (
+              <Text style={styles.socialDesc}>{settings.description}</Text>
+            ) : null}
+            <View style={styles.socialRow}>
+              {(["instagram", "tiktok", "whatsapp", "youtube"] as SocialPlatform[]).map((p) => {
+                const value = settings.socials?.[p];
+                if (!value) return null;
+                const url = socialUrlFor(p, value);
+                const label = socialLabelFor(p, value);
+                const icon =
+                  p === "instagram"
+                    ? "logo-instagram"
+                    : p === "tiktok"
+                      ? "logo-tiktok"
+                      : p === "whatsapp"
+                        ? "logo-whatsapp"
+                        : "logo-youtube";
+                return (
+                  <Pressable
+                    key={p}
+                    testID={`profile-social-${p}`}
+                    onPress={() => url && Linking.openURL(url).catch(() => {})}
+                    style={({ pressed }) => [
+                      styles.socialBtn,
+                      pressed && { opacity: 0.75 },
+                    ]}
+                  >
+                    <Ionicons name={icon as any} size={22} color={colors.brandSecondary} />
+                    <Text numberOfLines={1} style={styles.socialLabel}>
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
           </View>
         )}
@@ -356,6 +415,30 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   linkTxt: { flex: 1, color: colors.onSurface, fontSize: 14, fontWeight: "600" },
+  socialCard: {
+    backgroundColor: colors.surfaceSecondary,
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.md as number,
+  },
+  socialDesc: { color: colors.onSurface, fontSize: 13, lineHeight: 19 },
+  socialRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm as number },
+  socialBtn: {
+    flexGrow: 1,
+    minWidth: "47%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm as number,
+    backgroundColor: colors.surfaceTertiary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+  },
+  socialLabel: { flex: 1, color: colors.onSurface, fontSize: 12, fontWeight: "700" },
   cta: {
     backgroundColor: colors.brandPrimary,
     borderRadius: radius.lg,

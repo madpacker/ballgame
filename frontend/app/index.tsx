@@ -13,12 +13,15 @@ import { useAuth } from "@/src/contexts/auth";
 import { useSkin } from "@/src/contexts/skin";
 import { BACKGROUNDS } from "@/src/data/quiz";
 import { getLocalHigh, type LocalHigh } from "@/src/storage/localHigh";
+import { absoluteFileUrl, useAppSettings } from "@/src/hooks/useAppSettings";
 
 export default function Home() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
   const { accent } = useSkin();
+  const { settings } = useAppSettings();
+  const customBg = absoluteFileUrl(settings.background_url);
   const [high, setHigh] = useState<LocalHigh>({ classic: 0, time_attack: 0 });
   const [unread, setUnread] = useState(0);
   const [theme, setTheme] = useState<{ title: string; subtitle: string; accent: string; id: string } | null>(null);
@@ -68,7 +71,7 @@ export default function Home() {
   return (
     <View style={styles.container}>
       <View style={[styles.hero, { paddingTop: insets.top + spacing.md }]}>
-        <Image source={BACKGROUNDS.stadium} style={StyleSheet.absoluteFill} contentFit="cover" />
+        <Image source={customBg || BACKGROUNDS.stadium} style={StyleSheet.absoluteFill} contentFit="cover" />
         <LinearGradient
           colors={["rgba(15,17,21,0.55)", "rgba(15,17,21,0.95)", colors.surface]}
           style={StyleSheet.absoluteFill}
@@ -237,6 +240,14 @@ export default function Home() {
 
         <View style={styles.quickRow}>
           <Pressable
+            testID="news-shortcut"
+            onPress={() => router.push("/news")}
+            style={styles.quickBtn}
+          >
+            <Ionicons name="newspaper" size={22} color={colors.brandSecondary} />
+            <Text style={styles.quickTxt}>Berita</Text>
+          </Pressable>
+          <Pressable
             testID="matches-shortcut"
             onPress={() => router.push("/matches")}
             style={styles.quickBtn}
@@ -250,7 +261,7 @@ export default function Home() {
             style={styles.quickBtn}
           >
             <Ionicons name="podium" size={22} color={colors.brandSecondary} />
-            <Text style={styles.quickTxt}>Leaderboard</Text>
+            <Text style={styles.quickTxt}>Peringkat</Text>
           </Pressable>
           <Pressable
             testID="profile-shortcut"
