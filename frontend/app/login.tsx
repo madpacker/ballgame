@@ -31,7 +31,7 @@ export default function Login() {
           <View style={styles.logo}>
             <Image
               source={require("@/assets/images/icon.png")}
-              style={{ width: 56, height: 56 }}
+              style={{ width: 96, height: 96 }}
               contentFit="cover"
             />
           </View>
@@ -78,12 +78,12 @@ const styles = StyleSheet.create({
   close: { position: "absolute", top: spacing.lg, right: spacing.lg, padding: spacing.xs, zIndex: 2 },
   heroBlock: { gap: spacing.md as number, marginBottom: spacing.lg },
   logo: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.md,
-    backgroundColor: colors.brandPrimary,
-    alignItems: "center",
-    justifyContent: "center",
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    overflow: "hidden",
+    borderWidth: 2,
+    borderColor: colors.brandSecondary,
   },
   logoTxt: { color: colors.onBrandPrimary, fontWeight: "900", fontSize: 20, letterSpacing: 1 },
   title: { color: colors.onSurface, fontSize: 26, fontWeight: "900", letterSpacing: 1 },

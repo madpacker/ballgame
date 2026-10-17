@@ -75,7 +75,7 @@ export default function Home() {
         />
         <View style={styles.topBar}>
           <View style={styles.brandRow}>
-            <View style={[styles.logoBadge, { backgroundColor: accent.primary }]}>
+            <View style={styles.logoBadge}>
               <Image
                 source={require("@/assets/images/icon.png")}
                 style={styles.logoImg}
@@ -316,12 +316,12 @@ const styles = StyleSheet.create({
   },
   brandRow: { flexDirection: "row", alignItems: "center", gap: spacing.md as number },
   logoBadge: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.md,
-    backgroundColor: colors.brandPrimary,
-    alignItems: "center",
-    justifyContent: "center",
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    overflow: "hidden",
+    borderWidth: 2,
+    borderColor: colors.brandSecondary,
   },
   logoText: {
     color: colors.onBrandPrimary,
@@ -329,7 +329,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     letterSpacing: 1,
   },
-  logoImg: { width: 44, height: 44 },
+  logoImg: { width: 64, height: 64 },
   brandTitle: {
     color: colors.onSurface,
     fontWeight: "900",
