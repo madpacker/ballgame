@@ -28,6 +28,9 @@ type NewsItem = {
   author_name?: string | null;
   author_picture?: string | null;
   created_at: string;
+  like_count: number;
+  comment_count: number;
+  liked: boolean;
 };
 
 const PLATFORM_ICON: Record<SocialPlatform, string> = {
@@ -231,6 +234,20 @@ export default function NewsScreen() {
                     <Text style={styles.cardMeta}>{item.author_name}</Text>
                   </>
                 ) : null}
+                <View style={{ flex: 1 }} />
+                <Ionicons
+                  name={item.liked ? "heart" : "heart-outline"}
+                  size={13}
+                  color={item.liked ? colors.brandPrimary : colors.muted}
+                />
+                <Text style={styles.cardMeta}>{item.like_count}</Text>
+                <Ionicons
+                  name="chatbubble-outline"
+                  size={12}
+                  color={colors.muted}
+                  style={{ marginLeft: 6 }}
+                />
+                <Text style={styles.cardMeta}>{item.comment_count}</Text>
               </View>
             </View>
           </Pressable>

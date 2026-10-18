@@ -641,6 +641,29 @@ export default function AdminScreen() {
     } catch {}
   };
 
+  const moveQi = async (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= quizItems.length) return;
+    const next = [...quizItems];
+    [next[index], next[target]] = [next[target], next[index]];
+    // Reassign order_index on the client immediately for snappy UX.
+    const reordered = next.map((it, i) => ({ ...it, order_index: i }));
+    setQuizItems(reordered);
+    try {
+      await api("/admin/quiz-items/reorder", {
+        method: "POST",
+        body: JSON.stringify({
+          category: quizCat,
+          item_ids: reordered.map((x) => x.item_id),
+        }),
+      });
+    } catch {
+      // Rollback on failure.
+      setQuizItems(quizItems);
+      setMsg({ kind: "err", txt: "Gagal mengubah urutan soal." });
+    }
+  };
+
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
@@ -1199,6 +1222,34 @@ export default function AdminScreen() {
           )}
           {quizItems.map((it, idx) => (
             <View key={it.item_id} style={styles.playerRow}>
+              <View style={styles.reorderCol}>
+                <Pressable
+                  testID={`qi-up-${it.item_id}`}
+                  onPress={() => moveQi(idx, -1)}
+                  disabled={idx === 0}
+                  hitSlop={6}
+                  style={({ pressed }) => [
+                    styles.reorderBtn,
+                    idx === 0 && { opacity: 0.3 },
+                    pressed && { opacity: 0.6 },
+                  ]}
+                >
+                  <Ionicons name="chevron-up" size={16} color={colors.onSurface} />
+                </Pressable>
+                <Pressable
+                  testID={`qi-down-${it.item_id}`}
+                  onPress={() => moveQi(idx, 1)}
+                  disabled={idx === quizItems.length - 1}
+                  hitSlop={6}
+                  style={({ pressed }) => [
+                    styles.reorderBtn,
+                    idx === quizItems.length - 1 && { opacity: 0.3 },
+                    pressed && { opacity: 0.6 },
+                  ]}
+                >
+                  <Ionicons name="chevron-down" size={16} color={colors.onSurface} />
+                </Pressable>
+              </View>
               {it.image_url ? (
                 <Image
                   source={absoluteFileUrl(it.image_url) || ""}
@@ -1644,6 +1695,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.onBrandPrimary,
   },
   qiToggleKnobOn: { alignSelf: "flex-end" },
+  reorderCol: {
+    gap: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  reorderBtn: {
+    width: 24,
+    height: 20,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceTertiary,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   playerRow: {
     flexDirection: "row",
     alignItems: "center",

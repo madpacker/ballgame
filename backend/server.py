@@ -1854,6 +1854,29 @@ async def quiz_items_delete(item_id: str, user: dict = Depends(require_admin)):
     return {"ok": True}
 
 
+class QuizReorderIn(BaseModel):
+    category: str
+    item_ids: List[str]
+
+
+@api_router.post("/admin/quiz-items/reorder")
+async def quiz_items_reorder(
+    body: QuizReorderIn, user: dict = Depends(require_admin)
+):
+    _assert_category(body.category)
+    now = datetime.now(timezone.utc)
+    for idx, item_id in enumerate(body.item_ids):
+        await db.quiz_items.update_one(
+            {
+                "item_id": item_id,
+                "category": body.category,
+                "deleted_at": {"$exists": False},
+            },
+            {"$set": {"order_index": idx, "updated_at": now}},
+        )
+    return {"ok": True, "count": len(body.item_ids)}
+
+
 app.include_router(api_router)
 
 app.add_middleware(

@@ -24,7 +24,8 @@
 - Match & Prediksi: `GET /matches`, `GET /live-match`, `POST /matches/{id}/predict` (now with scorer_player_id + motm_player_id), `GET /me/prediction/{id}`, `GET /predictions/leaderboard`, `POST /admin/matches/{id}/result` (now with scorer_player_ids list + motm_player_id)
 - App settings: `GET /app-settings`, `PUT /admin/app-settings` (description + socials), `POST/DELETE /admin/app-settings/background`
 - Berita: `GET /news`, `GET /news/{id}`, `POST /admin/news` (multipart), `PUT/DELETE /admin/news/{id}`
-- Soal Quiz (Trivia & Garuda): `GET /quiz-items?category=...`, `GET/POST /admin/quiz-items`, `PUT/DELETE /admin/quiz-items/{id}`, `POST /admin/quiz-items/{id}/image`
+- Soal Quiz (Trivia & Garuda): `GET /quiz-items?category=...`, `GET/POST /admin/quiz-items`, `PUT/DELETE /admin/quiz-items/{id}`, `POST /admin/quiz-items/{id}/image`, `POST /admin/quiz-items/reorder`
+- Berita Sosial: `POST /news/{id}/like` (toggle), `GET/POST /news/{id}/comments`, `DELETE /news/comments/{id}` (owner atau admin)
 
 ## Testing
-**200/200 pytest green** (176 iter9 + 24 iter10) di `/app/backend/tests/`.
+**221/221 pytest green** (176 iter9 + 24 iter10 + 21 iter11) di `/app/backend/tests/`.

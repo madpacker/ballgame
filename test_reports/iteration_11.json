@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 11 — News social (likes + comments) + admin quiz-items reorder. 21/21 backend pytest cases PASS. Covered: (a) POST /api/news/{id}/like idempotent toggle (first=liked:true count+1, second=liked:false count-1); (b) GET /api/news/{id} reflects per-viewer liked state (user A sees liked=true, user B sees liked=false while count>=1); (c) comment create + list newest-first, comment_count on GET /api/news/{id} increments; (d) DELETE /api/news/comments/{id} succeeds for owner (200), returns 403 for a different non-admin user, succeeds for admin on another user's comment; (e) unauthenticated POST /like, POST /comments, DELETE /comments all 401; (f) empty/whitespace comment body -> 422; (g) POST /api/admin/quiz-items/reorder with valid trivia ids returns {ok:true,count:3} and GET /api/quiz-items?category=trivia returns them in the exact submitted order; (h) invalid category -> 422; (i) unauth -> 401, non-admin -> 403; (j) reordering trivia leaves garuda order untouched (category isolation). Regression (/api/app-settings, /api/news, /api/players, /api/leaderboard, /api/scores auth-gate, /api/quiz-items public GET) all green. Frontend smoke: /news renders empty-state cleanly, /admin renders login gate cleanly (no red screen, Metro bundler healthy); required testIDs present in source (like-button, like-count, comment-input, send-comment at /app/frontend/app/news/[id].tsx; qi-up-{id}, qi-down-{id} at /app/frontend/app/admin.tsx). Full interactive UI testing of /news/[id] and the admin reorder arrows was NOT performed because no news item exists in the DB and Google OAuth cannot be driven headlessly; main agent can self-verify by signing in once (first user becomes admin) and posting a news item.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_news_social_and_reorder.py",
+    "/app/test_reports/pytest/pytest_iter11.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now ~1947 lines — still exceeds the 700-line guideline. Recommend splitting routers (news, quiz_items, matches, auth) when a convenient refactor window opens.",
+    "POST /api/admin/quiz-items/reorder silently ignores item_ids that don't match the given category (updates matched_count==0). Current behavior is fine for the shipped UI but a future enhancement could return a 'missed' count to surface stale/invalid ids.",
+    "news_like_toggle performs an insert followed by a count query; under heavy contention, the count could be slightly stale between the two awaits. Not a bug for current scale."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter11_news_social_and_reorder.py (new)"
+  ],
+  "success_rate": {"backend": "100% (21/21)", "frontend": "smoke only — pages render without red screen; interactive UI not driven due to auth + empty-DB"},
+  "seed_data_creation": "Backend tests create and clean their own TEST_ users, user_sessions, news items, news_likes, news_comments, and quiz_items. No leftover data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Admin auth in backend tests continues to use direct Mongo seeding of users+user_sessions with session_token='TEST_tok_*' (see _seed_user helper in test_iter11_news_social_and_reorder.py). EXPO_PUBLIC_BACKEND_URL comes from /app/frontend/.env via conftest.py. The reorder endpoint only touches docs whose category matches the request AND which are not soft-deleted; items not listed in item_ids keep their old order_index. GET /api/quiz-items ties on order_index then falls back to created_at ASC — tests assert order by filtering to the test-owned item_ids to avoid flakiness from other seeded rows.",
+  "rca_of_issue": "N/A — all requested features behave as specified."
+}

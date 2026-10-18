@@ -103,23 +103,116 @@
 #====================================================================================================
 
 user_problem_statement: |
-  Bug + 2 fitur baru dalam iterasi ini:
+  Two feature additions in this iteration (both backed by endpoints already shipped in
+  iteration 9/10):
 
-  BUG (prioritas P0):
-  - Semua pertanyaan bawaan (hardcoded) di `QUESTIONS` array menampilkan foto yang tidak sesuai
-    dengan pilihan jawaban (foto Unsplash generik dicocokkan dengan nama pemain Indonesia).
-    User minta pertanyaan bawaan dihapus total → sekarang semua soal diambil dari konten
-    admin (Pemain + Quiz Items).
+  1. News comments + likes (frontend wiring):
+     - Add heart / comment / share reactions bar on the news detail screen.
+     - List comments beneath the article with avatar, name, time-ago, delete action
+       (owner or admin can delete).
+     - Keyboard-friendly composer at the bottom (TextInput + send button), with
+       optimistic UI and anonymous users prompted to log in.
+     - News list cards now show like_count & comment_count badges.
+  2. Admin reorder for quiz items (Trivia Klub & Garuda Call):
+     - Up/down chevron buttons on each row that call POST /api/admin/quiz-items/reorder
+       with the new ordering (atomic bulk-update of order_index).
+     - Optimistic local reorder; rollback on failure.
 
-  FITUR BARU:
-  1. "Trivia Klub" sekarang format tebak gambar yang dikelola admin:
-       - Admin upload gambar + ketik pertanyaan + 4 opsi + pilih jawaban benar
-       - Admin bisa toggle ON/OFF setiap soal (soal yang OFF tidak dipakai di gameplay)
-       - Admin bisa edit, hapus, atau mengatur urutan
-  2. Kategori baru "GARUDA CALL" (quiz klasik seputar Timnas Indonesia):
-       - Format sama: gambar + pertanyaan + 4 opsi + jawaban benar + toggle ON/OFF
-       - Muncul sebagai kategori ke-5 di layar pilih kategori
-  3. Tambah fallback empty state di quiz: "Belum ada soal untuk kategori ini. Tanya admin."
+backend:
+  - task: "POST /api/admin/quiz-items/reorder"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Accepts {category: "trivia"|"garuda", item_ids: [str]}. Assigns order_index
+          0..N-1 to each item that matches the category and is not soft-deleted; items
+          not listed keep their previous order_index. Returns {ok, count}. 422 on
+          invalid category. Admin-only.
+frontend:
+  - task: "News detail: like + comment UI"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/news/[id].tsx, frontend/app/news/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Full detail screen rewrite: reactions bar (like, comment count, share),
+          scrollable comment list with per-comment delete icon shown only to the
+          owner or an admin, Alert-based confirmation on delete, bottom KeyboardAvoiding
+          composer (TextInput + send). Optimistic like toggle (reverts on error).
+          News list cards gained a right-aligned heart/comment count row.
+  - task: "Admin reorder quiz items"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/admin.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Each quiz item row has a vertical pair of chevron-up/chevron-down buttons.
+          Tapping swaps the item with its neighbour locally, then POSTs the full new
+          list of item_ids to /admin/quiz-items/reorder. The server rewrites
+          order_index 0..N-1 so the public /quiz-items endpoint returns items in the
+          admin's chosen order.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.3"
+  test_sequence: 11
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "News detail: like + comment UI"
+    - "POST /api/admin/quiz-items/reorder"
+    - "Admin reorder quiz items"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Please validate (A) and (B) end-to-end:
+
+      (A) News comments + likes (frontend). You can hit the backend directly with
+          Authorization: Bearer <session_token> to simulate different users.
+          Minimum coverage:
+            - POST /api/news/{id}/like twice flips liked:true then false.
+            - GET /api/news/{id} with the same bearer returns liked=true/false
+              matching the toggle.
+            - POST /api/news/{id}/comments {body:"..."} returns the created comment;
+              GET /api/news/{id}/comments lists it; comment_count on GET /api/news/{id}
+              increments.
+            - DELETE /api/news/comments/{id} as owner returns ok; as another non-admin
+              user returns 403; as admin on someone else's comment returns ok.
+            - Non-authenticated POST to /like or /comments returns 401.
+          Frontend smoke (seed a news item and one anonymous & one authed browser if
+          possible): the detail screen shows the reactions bar, the like count flips
+          on tap, the composer posts a comment and it appears at the top of the list.
+
+      (B) Quiz reorder. Minimum coverage:
+            - Create 3 trivia items. POST /admin/quiz-items/reorder with
+              {category:"trivia", item_ids:[id3,id1,id2]} returns {ok,count:3};
+              GET /api/quiz-items?category=trivia returns them in that order.
+            - Reorder with an invalid category returns 422.
+            - Non-admin / unauthed call returns 401 or 403.
+            - Items from a different category are untouched.
+          Frontend smoke: in /admin create 3 trivia items, verify the chevron-up
+          button on row 3 moves it to row 2 and persists after refresh.
 
 backend:
   - task: "Quiz Items CRUD (Trivia & Garuda Call)"
