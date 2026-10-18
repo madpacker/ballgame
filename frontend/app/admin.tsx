@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 import { useEffect, useState } from "react";
 import * as Haptics from "expo-haptics";
 
@@ -108,6 +109,7 @@ export default function AdminScreen() {
   const [qiImage, setQiImage] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [qiSubmitting, setQiSubmitting] = useState(false);
   const [qiEditId, setQiEditId] = useState<string | null>(null);
+  const [csvBusy, setCsvBusy] = useState(false);
 
   useEffect(() => {
     setDescDraft(settings.description ?? "");
@@ -664,6 +666,56 @@ export default function AdminScreen() {
     }
   };
 
+  const importCsv = async () => {
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: ["text/csv", "text/comma-separated-values", "application/csv", "*/*"],
+        copyToCacheDirectory: true,
+      });
+      if (picked.canceled || !picked.assets?.[0]) return;
+      const asset = picked.assets[0];
+      setCsvBusy(true);
+      const token = await getToken();
+      const res = await uploadForm(`${BACKEND}/api/admin/quiz-items/import`, {
+        headers: { Authorization: `Bearer ${token}` },
+        fields: { category: quizCat },
+        files: {
+          file: {
+            uri: asset.uri,
+            name: asset.name || "soal.csv",
+            mimeType: asset.mimeType || "text/csv",
+          },
+        } as any,
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        setMsg({ kind: "err", txt: `Impor gagal: ${err.slice(0, 120)}` });
+        return;
+      }
+      const data: { created: number; skipped: number; errors: string[] } =
+        await res.json();
+      setMsg({
+        kind: data.created > 0 ? "ok" : "err",
+        txt: `Impor selesai: ${data.created} dibuat, ${data.skipped} dilewati.${
+          data.errors?.length ? ` Masalah: ${data.errors.slice(0, 2).join("; ")}` : ""
+        }`,
+      });
+      // Reload list.
+      const qi = await api<AdminQuizItem[]>(`/admin/quiz-items?category=${quizCat}`);
+      setQuizItems(qi);
+      if (Platform.OS !== "web")
+        Haptics.notificationAsync(
+          data.created > 0
+            ? Haptics.NotificationFeedbackType.Success
+            : Haptics.NotificationFeedbackType.Warning,
+        ).catch(() => {});
+    } catch {
+      setMsg({ kind: "err", txt: "Impor CSV gagal." });
+    } finally {
+      setCsvBusy(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
@@ -1211,6 +1263,36 @@ export default function AdminScreen() {
               </Pressable>
             )}
           </View>
+
+          <View style={styles.csvCard}>
+            <View style={styles.csvHead}>
+              <Ionicons name="cloud-upload-outline" size={18} color={colors.brandSecondary} />
+              <Text style={styles.csvHeadTxt}>IMPOR MASSAL CSV</Text>
+            </View>
+            <Text style={styles.csvDesc}>
+              Format kolom:{" "}
+              <Text style={styles.csvMono}>
+                prompt, option_a, option_b, option_c, option_d, answer_index, active, image_url
+              </Text>
+              . Baris header wajib ada. answer_index 0-3 (A-D). Kolom active & image_url
+              opsional.
+            </Text>
+            <Pressable
+              testID="import-csv-button"
+              onPress={importCsv}
+              disabled={csvBusy}
+              style={[styles.ctaSecondaryGhost, csvBusy && { opacity: 0.5 }]}
+            >
+              {csvBusy ? (
+                <ActivityIndicator color={colors.brandSecondary} />
+              ) : (
+                <>
+                  <Ionicons name="document-attach" size={16} color={colors.brandSecondary} />
+                  <Text style={styles.ctaSecondaryGhostTxt}>PILIH FILE CSV</Text>
+                </>
+              )}
+            </Pressable>
+          </View>
         </View>
 
         <View>
@@ -1709,6 +1791,49 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  csvCard: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    backgroundColor: colors.surfaceTertiary,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.sm as number,
+  },
+  csvHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm as number,
+  },
+  csvHeadTxt: {
+    color: colors.onSurface,
+    fontWeight: "900",
+    fontSize: 12,
+    letterSpacing: 1.5,
+  },
+  csvDesc: { color: colors.muted, fontSize: 11, lineHeight: 16 },
+  csvMono: {
+    color: colors.onSurface,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
+  ctaSecondaryGhost: {
+    borderWidth: 1.5,
+    borderColor: colors.brandSecondary,
+    borderRadius: radius.md,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm as number,
+  },
+  ctaSecondaryGhostTxt: {
+    color: colors.brandSecondary,
+    fontWeight: "900",
+    fontSize: 12,
+    letterSpacing: 1.5,
   },
   playerRow: {
     flexDirection: "row",

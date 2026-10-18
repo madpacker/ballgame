@@ -103,20 +103,176 @@
 #====================================================================================================
 
 user_problem_statement: |
-  Two feature additions in this iteration (both backed by endpoints already shipped in
-  iteration 9/10):
+  Three social & admin productivity features in this iteration:
 
-  1. News comments + likes (frontend wiring):
-     - Add heart / comment / share reactions bar on the news detail screen.
-     - List comments beneath the article with avatar, name, time-ago, delete action
-       (owner or admin can delete).
-     - Keyboard-friendly composer at the bottom (TextInput + send button), with
-       optimistic UI and anonymous users prompted to log in.
-     - News list cards now show like_count & comment_count badges.
-  2. Admin reorder for quiz items (Trivia Klub & Garuda Call):
-     - Up/down chevron buttons on each row that call POST /api/admin/quiz-items/reorder
-       with the new ordering (atomic bulk-update of order_index).
-     - Optimistic local reorder; rollback on failure.
+  1. Threaded comment replies on news articles (max 1 level deep).
+  2. @user mentions in comments with autocomplete + automatic push notifications.
+  3. Bulk CSV import for Quiz Items (Trivia Klub & Garuda Call) so admin can create
+     20-30 soal in one go instead of filling the single-row form each time.
+
+backend:
+  - task: "News comments threading + mentions"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Comment schema gained `parent_comment_id: Optional[str]` and
+          `mentions: List[str]`. GET /api/news/{id}/comments now returns a threaded
+          tree: top-level sorted newest-first, each with a `replies: []` array of
+          first-level children (older-first). Tree is flattened to depth=1 — a reply
+          to a reply still saves `parent_comment_id` = the top-level ancestor.
+
+          POST /api/news/{id}/comments accepts optional `parent_comment_id` and
+          `mentions: [user_id]`. If `mentions` is omitted the server parses @handles
+          from body (regex `@([A-Za-z0-9_.-]{2,40})`) and matches against
+          `users.name` or `users.short_code` (prefix match, case-insensitive).
+          Notifications are sent to the article author, the parent comment author
+          (reply target), and each mentioned user — de-duplicated against the
+          commenter themselves.
+  - task: "User search for mention autocomplete"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          GET /api/users/search?q=... returns up to 8 users matching the prefix on
+          name OR short_code (both case-insensitive). Public endpoint; empty query
+          returns [].
+  - task: "Quiz Items CSV import"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          POST /api/admin/quiz-items/import multipart (category, file). Supports
+          comma/semicolon/tab delimiters, UTF-8 or latin-1 encoding. Required
+          columns: prompt, option_a, option_b, option_c, option_d, answer_index.
+          Optional: active (true/false, defaults true), image_url (only persisted
+          if it starts with http(s):// or /api/). Returns {created, skipped,
+          errors[], items[]}. Validates answer_index 0..3, rejects rows with any
+          required field blank. New items are appended to the end of the category's
+          order_index. Admin-only; 422 on invalid category or missing columns.
+
+frontend:
+  - task: "News detail: threaded replies + mention autocomplete"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/news/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Full rewrite of the detail screen:
+            - Each comment row renders a "Balas" button (testID `reply-${id}`) which
+              prefills the composer with "@Name " and pins the reply target
+              (testID `reply-banner` + `cancel-reply`).
+            - Replies are rendered under their parent with a border-left and
+              44px indent (testID preserved per comment).
+            - Composer detects `@token$` at the end of the input and shows an
+              autocomplete list (testID `mention-list` with `mention-${user_id}`
+              rows) that calls GET /api/users/search debounced 180ms.
+            - On tap, replaces `@token` with `@FirstName ` and stores the user_id
+              in `mentionIds`. The POST body sends both `mentions` and optional
+              `parent_comment_id`.
+            - Mentions inside existing comment bodies are highlighted via a
+              <MentionText/> helper that splits on the @handle regex.
+  - task: "Admin: Quiz Items CSV import button"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/admin.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added a card inside the Quiz Items form with a visible column spec
+          (prompt/option_a..answer_index/active/image_url) and a single CTA
+          "PILIH FILE CSV" (testID `import-csv-button`). Tapping opens the native
+          `expo-document-picker`, posts the file via `uploadForm` to
+          /api/admin/quiz-items/import with the current category, and shows an
+          inline toast summarising created/skipped/errors. Dependency added:
+          `expo-document-picker@57`.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.4"
+  test_sequence: 12
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "News comments threading + mentions"
+    - "Quiz Items CSV import"
+    - "User search for mention autocomplete"
+    - "News detail: threaded replies + mention autocomplete"
+    - "Admin: Quiz Items CSV import button"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Please validate (A), (B), (C) end-to-end. Reference existing patterns in
+      /app/backend/tests/test_iter11_news_social_and_reorder.py for Mongo seeding
+      of users + sessions.
+
+      (A) Threaded comments & mentions:
+        - POST /api/news/{id}/comments with parent_comment_id -> comment stored
+          with that parent; GET /api/news/{id}/comments returns a top-level comment
+          whose `replies` array includes the reply (depth=1).
+        - POST a reply with parent_comment_id pointing to another reply -> stored
+          with parent_comment_id = the GRAND-parent (keeps depth=1).
+        - POST with parent_comment_id of a comment on a different news -> 404.
+        - POST with mentions:[user_a_id, user_b_id] -> notification docs for A and B
+          created in `notifications` with kind=news_mention; the commenter themselves
+          is NEVER notified.
+        - POST with mentions omitted but body="hello @alice" where a user named
+          "Alice ..." exists -> server auto-parses and notifies that user.
+        - comment_count on GET /api/news/{id} increments for both top-level AND
+          replies.
+
+      (B) /api/users/search:
+        - ?q=al returns users whose name OR short_code starts with "al" (max 8).
+        - ?q=  (empty) returns [].
+        - Public (no auth required) — returns 200 even with no Authorization header.
+
+      (C) Quiz Items CSV import:
+        - POST /api/admin/quiz-items/import with category=trivia and a CSV body like
+            prompt,option_a,option_b,option_c,option_d,answer_index,active,image_url
+            Siapa pelatih?,Rahmad,Dejan,Robert,Djadjang,0,true,
+            Stadion?,SGBK,SGRP,Patriot,Kanjuruhan,1,,
+          returns {created:2, skipped:0}; GET /api/quiz-items?category=trivia then
+          returns those two items.
+        - CSV with invalid answer_index (e.g. 7) and a row with blank option_a
+          returns created<rows with those rows in `errors`.
+        - CSV missing a required column -> 422 missing_columns.
+        - Unauth or non-admin -> 401 or 403.
+        - Imported items are appended to the current order_index tail (do not
+          reorder existing items).
+
+      Regression: previously-tested endpoints still pass.
 
 backend:
   - task: "POST /api/admin/quiz-items/reorder"

@@ -11,6 +11,9 @@ import secrets
 import string
 import httpx
 import requests
+import re
+import csv
+import io
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
@@ -1336,11 +1339,16 @@ class CommentOut(BaseModel):
     name: str
     picture: Optional[str] = None
     body: str
+    parent_comment_id: Optional[str] = None
+    mentions: List[str] = []
     created_at: datetime
+    replies: List["CommentOut"] = []
 
 
 class CommentIn(BaseModel):
     body: str
+    parent_comment_id: Optional[str] = None
+    mentions: Optional[List[str]] = None
 
 
 async def _news_counts(news_id: str) -> tuple[int, int]:
@@ -1567,27 +1575,66 @@ async def news_like_toggle(news_id: str, user: dict = Depends(get_current_user))
 
 
 @api_router.get("/news/{news_id}/comments", response_model=List[CommentOut])
-async def news_comments_list(news_id: str, limit: int = 100):
+async def news_comments_list(news_id: str, limit: int = 200):
     await _news_exists(news_id)
-    cursor = (
-        db.news_comments.find(
-            {"news_id": news_id, "deleted_at": {"$exists": False}}, {"_id": 0}
-        )
-        .sort("created_at", -1)
-        .limit(limit)
-    )
-    out: List[CommentOut] = []
+    cursor = db.news_comments.find(
+        {"news_id": news_id, "deleted_at": {"$exists": False}}, {"_id": 0}
+    ).sort("created_at", 1)
+    docs: List[dict] = []
     async for c in cursor:
+        docs.append(c)
+    # Build threaded structure: top-level sorted newest-first; replies oldest-first.
+    by_id: dict[str, CommentOut] = {}
+    tops: List[CommentOut] = []
+    for d in docs:
+        co = CommentOut(
+            comment_id=d["comment_id"],
+            news_id=d["news_id"],
+            user_id=d["user_id"],
+            name=d.get("name", "User"),
+            picture=d.get("picture"),
+            body=d["body"],
+            parent_comment_id=d.get("parent_comment_id"),
+            mentions=d.get("mentions", []) or [],
+            created_at=d["created_at"],
+            replies=[],
+        )
+        by_id[co.comment_id] = co
+    for co in by_id.values():
+        parent_id = co.parent_comment_id
+        if parent_id and parent_id in by_id:
+            by_id[parent_id].replies.append(co)
+        else:
+            tops.append(co)
+    # Sort replies oldest-first inside each thread (already true by insertion),
+    # and sort top-level newest-first.
+    tops.sort(key=lambda c: c.created_at, reverse=True)
+    return tops[:limit]
+
+
+MENTION_RE = re.compile(r"@([A-Za-z0-9_\u00c0-\uffff.\-]{2,40})")
+
+
+@api_router.get("/users/search")
+async def users_search(q: str, limit: int = 8):
+    q = (q or "").strip()
+    if not q:
+        return []
+    # Case-insensitive prefix match on name OR short_code.
+    pattern = re.compile(f"^{re.escape(q)}", re.IGNORECASE)
+    cursor = db.users.find(
+        {"$or": [{"name": pattern}, {"short_code": pattern}]},
+        {"_id": 0, "user_id": 1, "name": 1, "picture": 1, "short_code": 1},
+    ).limit(max(1, min(limit, 20)))
+    out = []
+    async for u in cursor:
         out.append(
-            CommentOut(
-                comment_id=c["comment_id"],
-                news_id=c["news_id"],
-                user_id=c["user_id"],
-                name=c.get("name", "User"),
-                picture=c.get("picture"),
-                body=c["body"],
-                created_at=c["created_at"],
-            )
+            {
+                "user_id": u["user_id"],
+                "name": u.get("name"),
+                "picture": u.get("picture"),
+                "short_code": u.get("short_code"),
+            }
         )
     return out
 
@@ -1602,6 +1649,54 @@ async def news_comment_create(
         raise HTTPException(status_code=422, detail="empty_comment")
     if len(text) > 1000:
         text = text[:1000]
+
+    # Validate the parent exists & is in this thread.
+    parent_id = (body.parent_comment_id or "").strip() or None
+    if parent_id:
+        parent = await db.news_comments.find_one(
+            {
+                "comment_id": parent_id,
+                "news_id": news_id,
+                "deleted_at": {"$exists": False},
+            },
+            {"_id": 0, "parent_comment_id": 1, "user_id": 1},
+        )
+        if not parent:
+            raise HTTPException(status_code=404, detail="parent_not_found")
+        # Keep thread depth = 1: a reply to a reply still points at the top-level
+        # parent so the UI only has one indentation level.
+        if parent.get("parent_comment_id"):
+            parent_id = parent["parent_comment_id"]
+            # refresh parent record for notification target
+            parent = await db.news_comments.find_one(
+                {"comment_id": parent_id}, {"_id": 0, "user_id": 1}
+            )
+
+    # Resolve mentions: client may send user_ids explicitly OR we parse @handles
+    # from the body as a fallback.
+    mention_ids: List[str] = []
+    if body.mentions:
+        for uid in body.mentions:
+            uid = (uid or "").strip()
+            if uid and uid != user["user_id"] and uid not in mention_ids:
+                exists = await db.users.find_one({"user_id": uid}, {"_id": 1})
+                if exists:
+                    mention_ids.append(uid)
+    else:
+        for match in MENTION_RE.finditer(text):
+            handle = match.group(1)
+            u = await db.users.find_one(
+                {
+                    "$or": [
+                        {"name": re.compile(f"^{re.escape(handle)}$", re.IGNORECASE)},
+                        {"short_code": re.compile(f"^{re.escape(handle)}$", re.IGNORECASE)},
+                    ]
+                },
+                {"_id": 0, "user_id": 1},
+            )
+            if u and u["user_id"] != user["user_id"] and u["user_id"] not in mention_ids:
+                mention_ids.append(u["user_id"])
+
     doc = {
         "comment_id": f"cm_{uuid.uuid4().hex[:12]}",
         "news_id": news_id,
@@ -1609,21 +1704,62 @@ async def news_comment_create(
         "name": user["name"],
         "picture": user.get("picture"),
         "body": text,
+        "parent_comment_id": parent_id,
+        "mentions": mention_ids,
         "created_at": datetime.now(timezone.utc),
     }
     await db.news_comments.insert_one(doc)
-    # Notify author on new comments (not self).
+
+    notified: set = {user["user_id"]}
+
+    # Notify article author.
     try:
         author_id = news_doc.get("author_id")
-        if author_id and author_id != user["user_id"]:
+        if author_id and author_id not in notified:
             await push_notification(
                 author_id,
                 "news_comment",
                 f"{user['name']} berkomentar: '{text[:80]}'",
                 from_user=user,
             )
+            notified.add(author_id)
     except Exception:
         pass
+
+    # Notify parent comment author on replies.
+    if parent_id:
+        try:
+            parent_doc = await db.news_comments.find_one(
+                {"comment_id": parent_id}, {"_id": 0, "user_id": 1}
+            )
+            if parent_doc:
+                reply_target = parent_doc["user_id"]
+                if reply_target not in notified:
+                    await push_notification(
+                        reply_target,
+                        "news_reply",
+                        f"{user['name']} membalas komentar Anda: '{text[:80]}'",
+                        from_user=user,
+                    )
+                    notified.add(reply_target)
+        except Exception:
+            pass
+
+    # Notify mentioned users.
+    for uid in mention_ids:
+        if uid in notified:
+            continue
+        try:
+            await push_notification(
+                uid,
+                "news_mention",
+                f"{user['name']} menyebut Anda di komentar: '{text[:80]}'",
+                from_user=user,
+            )
+            notified.add(uid)
+        except Exception:
+            pass
+
     return CommentOut(
         comment_id=doc["comment_id"],
         news_id=doc["news_id"],
@@ -1631,7 +1767,10 @@ async def news_comment_create(
         name=doc["name"],
         picture=doc.get("picture"),
         body=doc["body"],
+        parent_comment_id=doc.get("parent_comment_id"),
+        mentions=mention_ids,
         created_at=doc["created_at"],
+        replies=[],
     )
 
 
@@ -1875,6 +2014,107 @@ async def quiz_items_reorder(
             {"$set": {"order_index": idx, "updated_at": now}},
         )
     return {"ok": True, "count": len(body.item_ids)}
+
+
+class QuizImportResult(BaseModel):
+    created: int
+    skipped: int
+    errors: List[str] = []
+    items: List[QuizItemOut]
+
+
+@api_router.post("/admin/quiz-items/import", response_model=QuizImportResult)
+async def quiz_items_import(
+    category: str = Form(...),
+    file: UploadFile = File(...),
+    user: dict = Depends(require_admin),
+):
+    _assert_category(category)
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty_file")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = raw.decode("latin-1")
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid_encoding")
+
+    # Allow comma or semicolon delimited CSV.
+    try:
+        sniffed = csv.Sniffer().sniff(text.splitlines()[0] if text else "", delimiters=",;\t")
+        delimiter = sniffed.delimiter
+    except Exception:
+        delimiter = ","
+    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+    required = {"prompt", "option_a", "option_b", "option_c", "option_d", "answer_index"}
+    if not reader.fieldnames or not required.issubset({c.strip().lower() for c in reader.fieldnames}):
+        raise HTTPException(
+            status_code=422,
+            detail=f"missing_columns:{','.join(sorted(required))}",
+        )
+
+    now = datetime.now(timezone.utc)
+    created: List[dict] = []
+    errors: List[str] = []
+    skipped = 0
+
+    # Determine next order_index for appended items.
+    last = await db.quiz_items.find_one(
+        {"category": category, "deleted_at": {"$exists": False}},
+        sort=[("order_index", -1)],
+    )
+    next_order = (last["order_index"] + 1) if last else 0
+
+    for i, row in enumerate(reader, start=2):  # start=2 to account for header row
+        norm = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items() if k}
+        prompt = norm.get("prompt", "")
+        a = norm.get("option_a", "")
+        b = norm.get("option_b", "")
+        c = norm.get("option_c", "")
+        d = norm.get("option_d", "")
+        ans = norm.get("answer_index", "")
+        active_raw = norm.get("active", "true").lower()
+        image_url = norm.get("image_url", "") or None
+        if not prompt or not a or not b or not c or not d:
+            skipped += 1
+            errors.append(f"Baris {i}: kolom wajib kosong.")
+            continue
+        try:
+            ans_i = int(ans)
+            if ans_i < 0 or ans_i > 3:
+                raise ValueError()
+        except ValueError:
+            skipped += 1
+            errors.append(f"Baris {i}: answer_index harus 0-3 (dapat '{ans}').")
+            continue
+        active = active_raw not in ("0", "false", "no", "off", "")
+        doc = {
+            "item_id": f"qi_{uuid.uuid4().hex[:12]}",
+            "category": category,
+            "prompt": prompt,
+            "image_url": image_url if (image_url and image_url.startswith(("http://", "https://", "/api/"))) else None,
+            "options": [a, b, c, d],
+            "answer_index": ans_i,
+            "active": active,
+            "order_index": next_order,
+            "created_at": now,
+            "updated_at": now,
+            "created_by": user["user_id"],
+            "import_batch": now.isoformat(),
+        }
+        created.append(doc)
+        next_order += 1
+
+    if created:
+        await db.quiz_items.insert_many(created)
+    return QuizImportResult(
+        created=len(created),
+        skipped=skipped,
+        errors=errors[:20],
+        items=[_quiz_item_to_out(d) for d in created],
+    )
 
 
 app.include_router(api_router)

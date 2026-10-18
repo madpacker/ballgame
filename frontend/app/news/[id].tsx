@@ -15,7 +15,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import Ionicons from "@react-native-vector-icons/ionicons";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as Haptics from "expo-haptics";
 
 import { colors, radius, spacing } from "@/src/theme";
@@ -31,7 +31,6 @@ type NewsItem = {
   author_name?: string | null;
   author_picture?: string | null;
   created_at: string;
-  updated_at?: string | null;
   like_count: number;
   comment_count: number;
   liked: boolean;
@@ -44,7 +43,17 @@ type Comment = {
   name: string;
   picture?: string | null;
   body: string;
+  parent_comment_id?: string | null;
+  mentions?: string[];
   created_at: string;
+  replies?: Comment[];
+};
+
+type MentionUser = {
+  user_id: string;
+  name: string;
+  picture?: string | null;
+  short_code?: string | null;
 };
 
 function timeAgo(iso: string): string {
@@ -58,10 +67,25 @@ function timeAgo(iso: string): string {
   if (hr < 24) return `${hr} j`;
   const day = Math.floor(hr / 24);
   if (day < 7) return `${day} h`;
-  return new Date(iso).toLocaleDateString("id-ID", {
-    day: "2-digit",
-    month: "short",
-  });
+  return new Date(iso).toLocaleDateString("id-ID", { day: "2-digit", month: "short" });
+}
+
+// Render body with highlighted @mentions.
+function MentionText({ body }: { body: string }) {
+  const parts = body.split(/(@[A-Za-z0-9_.\-]{2,40})/g);
+  return (
+    <Text style={styles.commentBody}>
+      {parts.map((p, i) =>
+        p.startsWith("@") ? (
+          <Text key={i} style={styles.mentionText}>
+            {p}
+          </Text>
+        ) : (
+          <Text key={i}>{p}</Text>
+        ),
+      )}
+    </Text>
+  );
 }
 
 export default function NewsDetail() {
@@ -76,12 +100,17 @@ export default function NewsDetail() {
   const [commentDraft, setCommentDraft] = useState("");
   const [posting, setPosting] = useState(false);
   const [likeBusy, setLikeBusy] = useState(false);
+  const [replyTo, setReplyTo] = useState<Comment | null>(null);
+  const [mentionIds, setMentionIds] = useState<string[]>([]);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionSuggests, setMentionSuggests] = useState<MentionUser[]>([]);
+  const inputRef = useRef<TextInput>(null);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadNews = useCallback(async () => {
     if (!id) return;
     try {
-      const n = await api<NewsItem>(`/news/${id}`);
-      setItem(n);
+      setItem(await api<NewsItem>(`/news/${id}`));
     } catch {
       setNotFound(true);
     }
@@ -90,8 +119,7 @@ export default function NewsDetail() {
   const loadComments = useCallback(async () => {
     if (!id) return;
     try {
-      const cs = await api<Comment[]>(`/news/${id}/comments`);
-      setComments(cs);
+      setComments(await api<Comment[]>(`/news/${id}/comments`));
     } catch {
       setComments([]);
     }
@@ -105,6 +133,60 @@ export default function NewsDetail() {
     })();
   }, [loadNews, loadComments]);
 
+  // --- Mention autocomplete ---
+  useEffect(() => {
+    if (!mentionQuery || mentionQuery.length < 1) {
+      setMentionSuggests([]);
+      return;
+    }
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(async () => {
+      try {
+        const list = await api<MentionUser[]>(
+          `/users/search?q=${encodeURIComponent(mentionQuery)}`,
+        );
+        setMentionSuggests(list);
+      } catch {
+        setMentionSuggests([]);
+      }
+    }, 180);
+    return () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    };
+  }, [mentionQuery]);
+
+  const onDraftChange = (text: string) => {
+    setCommentDraft(text);
+    // Detect @token at the current cursor-end position.
+    const match = /@([A-Za-z0-9_.\-]{0,30})$/.exec(text);
+    setMentionQuery(match ? match[1] : null);
+  };
+
+  const insertMention = (u: MentionUser) => {
+    const token = (u.name || "").split(/\s+/)[0] || u.short_code || "user";
+    const next = commentDraft.replace(/@([A-Za-z0-9_.\-]{0,30})$/, `@${token} `);
+    setCommentDraft(next);
+    setMentionIds((prev) => (prev.includes(u.user_id) ? prev : [...prev, u.user_id]));
+    setMentionQuery(null);
+    setMentionSuggests([]);
+    inputRef.current?.focus();
+  };
+
+  const beginReply = (c: Comment) => {
+    setReplyTo(c);
+    // Prefill with "@Name " so it's obvious which user we're replying to.
+    const token = (c.name || "").split(/\s+/)[0] || "user";
+    if (!commentDraft.includes(`@${token}`)) {
+      setCommentDraft((prev) => `@${token} ${prev}`);
+    }
+    setMentionIds((prev) => (prev.includes(c.user_id) ? prev : [...prev, c.user_id]));
+    inputRef.current?.focus();
+  };
+
+  const cancelReply = () => {
+    setReplyTo(null);
+  };
+
   const toggleLike = async () => {
     if (!user) {
       Alert.alert("Masuk dulu", "Login dulu untuk memberi like.", [
@@ -115,28 +197,19 @@ export default function NewsDetail() {
     }
     if (!item || likeBusy) return;
     setLikeBusy(true);
-    // Optimistic update
     const prevLiked = item.liked;
     const prevCount = item.like_count;
-    setItem({
-      ...item,
-      liked: !prevLiked,
-      like_count: prevCount + (prevLiked ? -1 : 1),
-    });
-    if (Platform.OS !== "web")
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    setItem({ ...item, liked: !prevLiked, like_count: prevCount + (prevLiked ? -1 : 1) });
+    if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     try {
       const res = await api<{ liked: boolean; like_count: number }>(
         `/news/${item.news_id}/like`,
         { method: "POST" },
       );
       setItem((prev) =>
-        prev
-          ? { ...prev, liked: res.liked, like_count: res.like_count }
-          : prev,
+        prev ? { ...prev, liked: res.liked, like_count: res.like_count } : prev,
       );
     } catch {
-      // revert
       setItem((prev) =>
         prev ? { ...prev, liked: prevLiked, like_count: prevCount } : prev,
       );
@@ -156,16 +229,30 @@ export default function NewsDetail() {
     const text = commentDraft.trim();
     if (!text || !item || posting) return;
     setPosting(true);
+    const payload: {
+      body: string;
+      parent_comment_id?: string;
+      mentions: string[];
+    } = {
+      body: text,
+      mentions: mentionIds,
+    };
+    if (replyTo) payload.parent_comment_id = replyTo.comment_id;
     try {
-      const c = await api<Comment>(`/news/${item.news_id}/comments`, {
+      await api<Comment>(`/news/${item.news_id}/comments`, {
         method: "POST",
-        body: JSON.stringify({ body: text }),
+        body: JSON.stringify(payload),
       });
-      setComments((prev) => [c, ...prev]);
+      // Reload from server so threading & counts are consistent.
+      await loadComments();
       setItem((prev) =>
         prev ? { ...prev, comment_count: prev.comment_count + 1 } : prev,
       );
       setCommentDraft("");
+      setMentionIds([]);
+      setReplyTo(null);
+      setMentionQuery(null);
+      setMentionSuggests([]);
       if (Platform.OS !== "web")
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     } catch {
@@ -175,7 +262,7 @@ export default function NewsDetail() {
     }
   };
 
-  const removeComment = (c: Comment) => {
+  const removeComment = (c: Comment, isReply: boolean) => {
     Alert.alert("Hapus komentar?", c.body.slice(0, 80), [
       { text: "Batal", style: "cancel" },
       {
@@ -184,12 +271,13 @@ export default function NewsDetail() {
         onPress: async () => {
           try {
             await api(`/news/comments/${c.comment_id}`, { method: "DELETE" });
-            setComments((prev) =>
-              prev.filter((x) => x.comment_id !== c.comment_id),
-            );
+            await loadComments();
             setItem((prev) =>
               prev
-                ? { ...prev, comment_count: Math.max(0, prev.comment_count - 1) }
+                ? {
+                    ...prev,
+                    comment_count: Math.max(0, prev.comment_count - (isReply ? 1 : 1)),
+                  }
                 : prev,
             );
           } catch {
@@ -208,6 +296,51 @@ export default function NewsDetail() {
         message: `${item.title}\n\nBaca di Cak Mad Quiz:\ncakmad://news/${item.news_id}`,
       });
     } catch {}
+  };
+
+  const renderCommentRow = (c: Comment, isReply: boolean) => {
+    const canDelete = user && (user.user_id === c.user_id || user.is_admin);
+    return (
+      <View
+        key={c.comment_id}
+        style={[styles.comment, isReply && styles.commentReply]}
+      >
+        {c.picture ? (
+          <Image source={c.picture} style={styles.commentAvatar} />
+        ) : (
+          <View style={[styles.commentAvatar, styles.authorAvatarFallback]}>
+            <Ionicons name="person" size={14} color={colors.onSurface} />
+          </View>
+        )}
+        <View style={{ flex: 1 }}>
+          <View style={styles.commentHeader}>
+            <Text style={styles.commentName} numberOfLines={1}>
+              {c.name}
+            </Text>
+            <Text style={styles.commentTime}>{timeAgo(c.created_at)}</Text>
+            {canDelete && (
+              <Pressable
+                testID={`delete-comment-${c.comment_id}`}
+                onPress={() => removeComment(c, isReply)}
+                hitSlop={6}
+              >
+                <Ionicons name="trash-outline" size={14} color={colors.muted} />
+              </Pressable>
+            )}
+          </View>
+          <MentionText body={c.body} />
+          <Pressable
+            testID={`reply-${c.comment_id}`}
+            onPress={() => beginReply(c)}
+            hitSlop={6}
+            style={styles.replyBtn}
+          >
+            <Ionicons name="return-down-forward" size={13} color={colors.muted} />
+            <Text style={styles.replyBtnTxt}>Balas</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
   };
 
   return (
@@ -283,7 +416,6 @@ export default function NewsDetail() {
                 </View>
               </View>
 
-              {/* Reactions bar */}
               <View style={styles.reactionsRow}>
                 <Pressable
                   testID="like-button"
@@ -302,10 +434,7 @@ export default function NewsDetail() {
                   />
                   <Text
                     testID="like-count"
-                    style={[
-                      styles.reactionTxt,
-                      item.liked && { color: colors.brandPrimary },
-                    ]}
+                    style={[styles.reactionTxt, item.liked && { color: colors.brandPrimary }]}
                   >
                     {item.like_count}
                   </Text>
@@ -329,11 +458,8 @@ export default function NewsDetail() {
                 {item.body}
               </Text>
 
-              {/* Comments */}
               <View style={styles.divider} />
-              <Text style={styles.commentsTitle}>
-                KOMENTAR · {item.comment_count}
-              </Text>
+              <Text style={styles.commentsTitle}>KOMENTAR · {item.comment_count}</Text>
               {comments.length === 0 ? (
                 <View style={styles.emptyComments}>
                   <Ionicons name="chatbubbles-outline" size={28} color={colors.muted} />
@@ -342,56 +468,75 @@ export default function NewsDetail() {
                   </Text>
                 </View>
               ) : (
-                comments.map((c) => {
-                  const canDelete =
-                    user && (user.user_id === c.user_id || user.is_admin);
-                  return (
-                    <View key={c.comment_id} style={styles.comment}>
-                      {c.picture ? (
-                        <Image source={c.picture} style={styles.commentAvatar} />
-                      ) : (
-                        <View
-                          style={[styles.commentAvatar, styles.authorAvatarFallback]}
-                        >
-                          <Ionicons name="person" size={14} color={colors.onSurface} />
-                        </View>
-                      )}
-                      <View style={{ flex: 1 }}>
-                        <View style={styles.commentHeader}>
-                          <Text style={styles.commentName} numberOfLines={1}>
-                            {c.name}
-                          </Text>
-                          <Text style={styles.commentTime}>{timeAgo(c.created_at)}</Text>
-                          {canDelete && (
-                            <Pressable
-                              testID={`delete-comment-${c.comment_id}`}
-                              onPress={() => removeComment(c)}
-                              hitSlop={6}
-                            >
-                              <Ionicons
-                                name="trash-outline"
-                                size={14}
-                                color={colors.muted}
-                              />
-                            </Pressable>
-                          )}
-                        </View>
-                        <Text style={styles.commentBody}>{c.body}</Text>
+                comments.map((c) => (
+                  <View key={c.comment_id}>
+                    {renderCommentRow(c, false)}
+                    {c.replies && c.replies.length > 0 && (
+                      <View style={styles.repliesWrap}>
+                        {c.replies.map((r) => renderCommentRow(r, true))}
                       </View>
-                    </View>
-                  );
-                })
+                    )}
+                  </View>
+                ))
               )}
             </View>
           </ScrollView>
 
-          {/* Composer */}
+          {/* Mention suggest dropdown */}
+          {mentionSuggests.length > 0 && (
+            <View style={styles.mentionList} testID="mention-list">
+              {mentionSuggests.map((u) => (
+                <Pressable
+                  key={u.user_id}
+                  testID={`mention-${u.user_id}`}
+                  onPress={() => insertMention(u)}
+                  style={({ pressed }) => [styles.mentionRow, pressed && { opacity: 0.7 }]}
+                >
+                  {u.picture ? (
+                    <Image source={u.picture} style={styles.mentionAvatar} />
+                  ) : (
+                    <View style={[styles.mentionAvatar, styles.authorAvatarFallback]}>
+                      <Ionicons name="person" size={14} color={colors.onSurface} />
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.mentionName} numberOfLines={1}>
+                      {u.name}
+                    </Text>
+                    {u.short_code ? (
+                      <Text style={styles.mentionCode}>{u.short_code}</Text>
+                    ) : null}
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          )}
+
+          {replyTo && (
+            <View style={styles.replyBanner} testID="reply-banner">
+              <Ionicons name="return-down-forward" size={14} color={colors.brandSecondary} />
+              <Text style={styles.replyBannerTxt} numberOfLines={1}>
+                Membalas <Text style={{ fontWeight: "900" }}>{replyTo.name}</Text>
+              </Text>
+              <Pressable onPress={cancelReply} hitSlop={8} testID="cancel-reply">
+                <Ionicons name="close" size={16} color={colors.muted} />
+              </Pressable>
+            </View>
+          )}
+
           <View style={[styles.composer, { paddingBottom: insets.bottom + spacing.sm }]}>
             <TextInput
+              ref={inputRef}
               testID="comment-input"
               value={commentDraft}
-              onChangeText={setCommentDraft}
-              placeholder={user ? "Tulis komentar..." : "Login untuk berkomentar"}
+              onChangeText={onDraftChange}
+              placeholder={
+                user
+                  ? replyTo
+                    ? `Balas ${replyTo.name}... (ketik @ untuk mention)`
+                    : "Tulis komentar... (ketik @ untuk mention)"
+                  : "Login untuk berkomentar"
+              }
               placeholderTextColor={colors.muted}
               style={styles.composerInput}
               multiline
@@ -473,11 +618,7 @@ const styles = StyleSheet.create({
     borderColor: colors.brandPrimary,
     backgroundColor: colors.brandTertiary,
   },
-  reactionTxt: {
-    color: colors.onSurface,
-    fontWeight: "800",
-    fontSize: 13,
-  },
+  reactionTxt: { color: colors.onSurface, fontWeight: "800", fontSize: 13 },
   commentsTitle: {
     color: colors.muted,
     fontSize: 11,
@@ -485,17 +626,16 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginTop: spacing.sm,
   },
-  emptyComments: {
-    alignItems: "center",
-    paddingVertical: spacing.lg,
-    gap: spacing.sm as number,
-  },
+  emptyComments: { alignItems: "center", paddingVertical: spacing.lg, gap: spacing.sm as number },
   emptyCommentsTxt: { color: colors.muted, fontSize: 13 },
-  comment: {
-    flexDirection: "row",
-    gap: spacing.sm as number,
-    paddingVertical: spacing.sm,
+  comment: { flexDirection: "row", gap: spacing.sm as number, paddingVertical: spacing.sm },
+  commentReply: {
+    paddingLeft: spacing.sm,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.border,
+    marginLeft: spacing.sm,
   },
+  repliesWrap: { marginLeft: 44 /* avatar + gap */ },
   commentAvatar: {
     width: 32,
     height: 32,
@@ -511,6 +651,48 @@ const styles = StyleSheet.create({
   commentName: { color: colors.onSurface, fontWeight: "800", fontSize: 13, flex: 1 },
   commentTime: { color: colors.muted, fontSize: 11 },
   commentBody: { color: colors.onSurface, fontSize: 14, lineHeight: 20 },
+  mentionText: { color: colors.brandSecondary, fontWeight: "800" },
+  replyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 4,
+    marginTop: 2,
+    alignSelf: "flex-start",
+  },
+  replyBtnTxt: { color: colors.muted, fontSize: 11, fontWeight: "700" },
+  replyBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm as number,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    backgroundColor: colors.brandTertiary,
+  },
+  replyBannerTxt: { color: colors.onSurface, fontSize: 12, flex: 1 },
+  mentionList: {
+    backgroundColor: colors.surfaceSecondary,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    maxHeight: 220,
+  },
+  mentionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm as number,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  mentionAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surfaceTertiary,
+  },
+  mentionName: { color: colors.onSurface, fontWeight: "800", fontSize: 13 },
+  mentionCode: { color: colors.muted, fontSize: 11, marginTop: 2 },
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",

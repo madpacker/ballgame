@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 12 backend testing: threaded comments, @mentions + /users/search, and admin CSV import for quiz items. Wrote /app/backend/tests/test_iter12_threads_mentions_import.py with 24 pytest cases covering every scenario in the review request, plus regression on previously-shipped endpoints. All 24/24 tests passed against the public EXPO_PUBLIC_BACKEND_URL (https://ballgame-id.preview.emergentagent.com).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/users/search", "issue": "Endpoint is public (no auth) — intentional per spec. Not an issue, flagged for awareness: anyone can enumerate users by prefix with limit<=20. No sensitive fields (email) returned, only user_id/name/picture/short_code."},
+      {"endpoint": "POST /api/admin/quiz-items/import", "issue": "csv.Sniffer uses only the first line; works for the semicolon + BOM cases tested, but a CSV whose header is comma-based while body is semicolon-based would mis-parse (edge case — not required by spec)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter12_threads_mentions_import.py",
+    "/app/test_reports/pytest/pytest_iter12.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is ~2187 lines — >700 line guideline exceeded. Consider splitting into routers (news, quiz_items, matches, auth, social) in a future iteration.",
+    "Threaded-comment depth flattening (lines 1666-1673) correctly resolves grand-parent -> top-level ancestor and keeps notifications pointing at the real parent author. Verified by test_depth_cap_reply_to_reply_flattens.",
+    "Mention self-dedup via the `notified` set (line 1713) correctly suppresses self-mentions and double-pings. Verified by test_explicit_mentions_notify_targets_not_self.",
+    "CSV import correctly: (a) handles UTF-8 BOM via decode('utf-8-sig'), (b) accepts ; or , delimiters, (c) rejects image_url that isn't http(s)/ /api/, (d) appends order_index starting at max+1. All verified."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter12_threads_mentions_import.py (new)"
+  ],
+  "success_rate": {"backend": "100% (24/24)", "frontend": "not tested — testing_type=backend"},
+  "seed_data_creation": "Test fixtures seed per-module admin + 2 non-admin users + 1 user named 'Alice_<hex>' with a 'ali<hex>' short_code directly in Mongo (users + user_sessions). All TEST_-prefixed data is cleaned up via module-scoped fixture teardowns.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 12 pytest file is at /app/backend/tests/test_iter12_threads_mentions_import.py and can be reused as regression. BASE_URL fixture is 'base_url' from conftest.py (reads EXPO_PUBLIC_BACKEND_URL from /app/frontend/.env). Admin + 2 non-admin + 1 Alice user are module-scoped fixtures. The admin CSV import endpoint returns 200 with {created, skipped, errors, items} even when all rows are invalid; only truly empty uploads 400 and missing-columns header 422.",
+  "rca_of_issue": "N/A — no bugs found. Every spec item in the review request behaves as described."
+}

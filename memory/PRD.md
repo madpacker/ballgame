@@ -25,7 +25,9 @@
 - App settings: `GET /app-settings`, `PUT /admin/app-settings` (description + socials), `POST/DELETE /admin/app-settings/background`
 - Berita: `GET /news`, `GET /news/{id}`, `POST /admin/news` (multipart), `PUT/DELETE /admin/news/{id}`
 - Soal Quiz (Trivia & Garuda): `GET /quiz-items?category=...`, `GET/POST /admin/quiz-items`, `PUT/DELETE /admin/quiz-items/{id}`, `POST /admin/quiz-items/{id}/image`, `POST /admin/quiz-items/reorder`
-- Berita Sosial: `POST /news/{id}/like` (toggle), `GET/POST /news/{id}/comments`, `DELETE /news/comments/{id}` (owner atau admin)
+- Berita Sosial: `POST /news/{id}/like` (toggle), `GET/POST /news/{id}/comments` (threaded + mentions), `DELETE /news/comments/{id}` (owner atau admin)
+- Mention: `GET /users/search?q=...` (public, max 8 hasil, prefix name/short_code)
+- Impor Soal: `POST /admin/quiz-items/import` (multipart CSV: prompt, option_a..d, answer_index, active?, image_url?)
 
 ## Testing
-**221/221 pytest green** (176 iter9 + 24 iter10 + 21 iter11) di `/app/backend/tests/`.
+**245/245 pytest green** (176 iter9 + 24 iter10 + 21 iter11 + 24 iter12) di `/app/backend/tests/`.
