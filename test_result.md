@@ -103,15 +103,171 @@
 #====================================================================================================
 
 user_problem_statement: |
-  Bug: Setiap kali main quiz, hasil akhir selalu tampil "9 benar / 10" dan skor stuck di 900,
-  padahal pemain menjawab semua pertanyaan dengan benar. Juga skor tidak bertambah di game berikutnya.
+  Bug + 2 fitur baru dalam iterasi ini:
 
-  Fitur baru yang baru dibangun:
-  1. Admin bisa mengubah background game (upload gambar global untuk semua user; tampil di Home & Quiz).
-  2. Halaman "Berita Update" (list + detail) — admin bisa posting berita dengan judul, cover image, body;
-     user bisa melihat list dan detail dengan pull-to-refresh.
-  3. Deskripsi + media sosial admin (Instagram, TikTok, WhatsApp, YouTube) yang bisa diedit lewat
-     dashboard admin; tombol link dapat dibuka di Profil & halaman Berita.
+  BUG (prioritas P0):
+  - Semua pertanyaan bawaan (hardcoded) di `QUESTIONS` array menampilkan foto yang tidak sesuai
+    dengan pilihan jawaban (foto Unsplash generik dicocokkan dengan nama pemain Indonesia).
+    User minta pertanyaan bawaan dihapus total → sekarang semua soal diambil dari konten
+    admin (Pemain + Quiz Items).
+
+  FITUR BARU:
+  1. "Trivia Klub" sekarang format tebak gambar yang dikelola admin:
+       - Admin upload gambar + ketik pertanyaan + 4 opsi + pilih jawaban benar
+       - Admin bisa toggle ON/OFF setiap soal (soal yang OFF tidak dipakai di gameplay)
+       - Admin bisa edit, hapus, atau mengatur urutan
+  2. Kategori baru "GARUDA CALL" (quiz klasik seputar Timnas Indonesia):
+       - Format sama: gambar + pertanyaan + 4 opsi + jawaban benar + toggle ON/OFF
+       - Muncul sebagai kategori ke-5 di layar pilih kategori
+  3. Tambah fallback empty state di quiz: "Belum ada soal untuk kategori ini. Tanya admin."
+
+backend:
+  - task: "Quiz Items CRUD (Trivia & Garuda Call)"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New endpoints under /api/quiz-items (public, filtered to active items) and
+          /api/admin/quiz-items (admin, all items including inactive):
+            GET  /api/quiz-items?category=trivia|garuda           (public, active only)
+            GET  /api/admin/quiz-items?category=trivia|garuda     (admin)
+            POST /api/admin/quiz-items (multipart category, prompt, option_a..d,
+                                        answer_index, active, order_index, image)
+            PUT  /api/admin/quiz-items/{item_id} (JSON: prompt, options[4], answer_index,
+                                                   active, order_index)
+            POST /api/admin/quiz-items/{item_id}/image (multipart image replace)
+            DELETE /api/admin/quiz-items/{item_id} (soft delete)
+          Validation: answer_index must be 0..3, options must be exactly 4 non-empty strings,
+          category restricted to {"trivia","garuda"}. Images uploaded to Emergent Object
+          Storage under cakmad/uploads/{user_id}/quiz_*.
+  - task: "News likes + comments endpoints (backend only, frontend wiring pending)"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Pre-existing from previous turn: POST /api/news/{id}/like (toggle),
+          GET /api/news/{id}/comments, POST /api/news/{id}/comments (JSON body),
+          DELETE /api/news/comments/{id} (owner or admin). NewsOut now embeds
+          like_count, comment_count, liked (based on Authorization header). Frontend
+          UI wiring is intentionally not yet done — testing focus is quiz items.
+
+frontend:
+  - task: "Hardcoded QUESTIONS array removed; data pipeline is 100% admin-driven"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/data/quiz.ts, frontend/src/data/questions.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          `QUESTIONS` in quiz.ts is now an empty array; `pickQuestions()` returns [].
+          `Category` type gained "garuda". `pickDynamicQuestions` now builds the pool
+          from /api/players (guess + history) and /api/quiz-items (trivia + garuda).
+          Themed challenges still restrict to player-based questions.
+  - task: "New GARUDA CALL category card + updated Trivia Klub description"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/category.tsx, frontend/src/data/quiz.ts"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added `{ key: "garuda", icon: "flag", color: colors.error }` to the CATS grid.
+          Trivia Klub description updated to "Tebak gambar seputar klub Laskar Sape Kerap".
+  - task: "Quiz empty state UI"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/quiz.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          If the question pool is empty for the selected category, the quiz now renders
+          a dedicated "Belum ada soal" screen with a CTA back to the category picker,
+          instead of silently returning null.
+  - task: "Admin Quiz Items CRUD UI"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/admin.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New section with segmented control (TRIVIA KLUB / GARUDA CALL). Form includes
+          image picker, prompt textarea, 4 option inputs with A/B/C/D badges that double
+          as "mark correct" toggles. List below shows all items with image thumbnail,
+          correct-answer meta, ON/OFF switch (qiToggle), edit, and delete. Supports
+          switching between creating and editing an existing item (image uploaded via
+          separate /image endpoint on edit).
+
+metadata:
+  created_by: "main_agent"
+  version: "1.2"
+  test_sequence: 10
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Hardcoded QUESTIONS array removed; data pipeline is 100% admin-driven"
+    - "Quiz Items CRUD (Trivia & Garuda Call)"
+    - "Admin Quiz Items CRUD UI"
+    - "Quiz empty state UI"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      HIGHEST PRIORITY — regression check for the bug fix: verify that no hardcoded
+      questions are shown in the app. Specifically:
+        a) GET /api/players when DB has NO players must return an empty list;
+           calling pickDynamicQuestions("all", 10) in /frontend/src/data/questions.ts
+           must likewise return []. Confirm the `QUESTIONS` export in quiz.ts is now
+           an empty array and `pickQuestions` returns [].
+        b) Open the quiz with category=guess|history|trivia|garuda when DB has no
+           admin content -> the UI should show the "Belum ada soal" empty state
+           (testID back-to-category), NOT the previous Unsplash placeholder questions.
+
+      Then test the new Quiz Items endpoints end-to-end:
+        - POST /api/admin/quiz-items with multipart (both with and without image)
+          returns the full item; GET /api/quiz-items?category=trivia reflects it.
+        - PUT /api/admin/quiz-items/{id} toggling active=false hides it from
+          GET /api/quiz-items but keeps it in GET /api/admin/quiz-items.
+        - POST /api/admin/quiz-items/{id}/image updates image_url and old file
+          remains fetchable via /api/files.
+        - DELETE soft-deletes. Non-admin and unauthenticated calls to any
+          /admin/quiz-items endpoint must return 401/403.
+        - Validation: category outside {trivia,garuda} -> 422; answer_index not
+          in 0..3 -> 422; options not exactly 4 or any empty -> 422.
+
+      Finally smoke-test the admin UI: toggling ON/OFF updates the item instantly,
+      editing an item pre-fills the form, deleting removes it from the list,
+      switching the TRIVIA/GARUDA segment refreshes the list.
 
 backend:
   - task: "App Settings endpoints (background + socials + description)"

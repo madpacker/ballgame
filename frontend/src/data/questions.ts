@@ -1,5 +1,5 @@
 import { api } from "@/src/api";
-import { pickQuestions as pickStatic, type Category, type Question } from "@/src/data/quiz";
+import { type Category, type Question } from "@/src/data/quiz";
 
 export type ApiPlayer = {
   player_id: string;
@@ -9,6 +9,17 @@ export type ApiPlayer = {
   previous_clubs: string[];
   photo_url?: string | null;
   included_in_quiz: boolean;
+};
+
+export type ApiQuizItem = {
+  item_id: string;
+  category: "trivia" | "garuda";
+  prompt: string;
+  image_url?: string | null;
+  options: string[];
+  answer_index: number;
+  active: boolean;
+  order_index: number;
 };
 
 export type ThemeFilter = {
@@ -44,18 +55,22 @@ function filterPlayersByTheme(players: ApiPlayer[], theme: ThemeFilter | null): 
   }
   if (filter_type === "years_contains") {
     const years = Array.isArray(filter_value) ? filter_value : [filter_value];
-    return players.filter((p) =>
-      !!p.years_at_mu && years.some((y: string) => (p.years_at_mu ?? "").includes(y)),
+    return players.filter(
+      (p) => !!p.years_at_mu && years.some((y: string) => (p.years_at_mu ?? "").includes(y)),
     );
   }
   if (filter_type === "previous_club_contains") {
-    const needles = (Array.isArray(filter_value) ? filter_value : [filter_value]).map((s: string) => s.toLowerCase());
+    const needles = (Array.isArray(filter_value) ? filter_value : [filter_value]).map(
+      (s: string) => s.toLowerCase(),
+    );
     return players.filter((p) =>
       p.previous_clubs.some((c) => needles.some((n: string) => c.toLowerCase().includes(n))),
     );
   }
   if (filter_type === "foreign") {
-    return players.filter((p) => !p.previous_clubs.some((c) => INDONESIAN_CLUBS.some((ic) => c.includes(ic))));
+    return players.filter(
+      (p) => !p.previous_clubs.some((c) => INDONESIAN_CLUBS.some((ic) => c.includes(ic))),
+    );
   }
   return players;
 }
@@ -73,7 +88,6 @@ function shuffle<T>(arr: T[]): T[] {
 function pickOptions(correct: string, pool: string[], count = 4): string[] {
   const unique = Array.from(new Set(pool.filter((p) => p && p !== correct)));
   const distractors = shuffle(unique).slice(0, count - 1);
-  // Pad with generic fallbacks if too few options
   const fallback = ["Persija Jakarta", "Arema FC", "Persib Bandung", "PSS Sleman", "Bali United"];
   while (distractors.length < count - 1) {
     const f = fallback[Math.floor(Math.random() * fallback.length)];
@@ -84,9 +98,11 @@ function pickOptions(correct: string, pool: string[], count = 4): string[] {
 }
 
 export function playersToQuestions(players: ApiPlayer[]): Question[] {
-  const withPhoto = players.filter((p) => p.photo_url);
-  const names = players.map((p) => p.name);
-  const clubs = players.flatMap((p) => p.previous_clubs);
+  // Only include players admin flagged in quiz AND that have a photo for the "guess" questions.
+  const inPool = players.filter((p) => p.included_in_quiz !== false);
+  const withPhoto = inPool.filter((p) => p.photo_url);
+  const names = inPool.map((p) => p.name);
+  const clubs = inPool.flatMap((p) => p.previous_clubs);
 
   const guess: Question[] = withPhoto.map((p) => {
     const opts = pickOptions(p.name, names);
@@ -100,7 +116,7 @@ export function playersToQuestions(players: ApiPlayer[]): Question[] {
     };
   });
 
-  const history: Question[] = players
+  const history: Question[] = inPool
     .filter((p) => p.previous_clubs.length > 0)
     .map((p) => {
       const correct = p.previous_clubs[0];
@@ -117,9 +133,28 @@ export function playersToQuestions(players: ApiPlayer[]): Question[] {
   return [...guess, ...history];
 }
 
+export function quizItemsToQuestions(items: ApiQuizItem[]): Question[] {
+  return items.map((it) => ({
+    id: `qi-${it.item_id}`,
+    category: it.category as Category,
+    prompt: it.prompt,
+    image: absolutePhotoUrl(it.image_url),
+    options: it.options,
+    answerIndex: Math.max(0, Math.min(3, it.answer_index)),
+  }));
+}
+
 export async function fetchDynamicPlayers(): Promise<ApiPlayer[]> {
   try {
     return await api<ApiPlayer[]>("/players");
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchQuizItems(category: "trivia" | "garuda"): Promise<ApiQuizItem[]> {
+  try {
+    return await api<ApiQuizItem[]>(`/quiz-items?category=${category}`);
   } catch {
     return [];
   }
@@ -130,18 +165,35 @@ export async function pickDynamicQuestions(
   count: number,
   theme?: ThemeFilter | null,
 ): Promise<Question[]> {
+  // Build the question pool from the admin's live content only.
   const players = await fetchDynamicPlayers();
   const filtered = filterPlayersByTheme(players, theme ?? null);
-  const dyn = playersToQuestions(filtered);
-  const staticAll = pickStatic("all", 999);
-  // When a theme is active, restrict to dynamic (themed) pool and skip static.
-  const pool = theme
-    ? cat === "all"
-      ? dyn
-      : dyn.filter((q) => q.category === cat)
-    : cat === "all"
-      ? [...dyn, ...staticAll]
-      : [...dyn.filter((q) => q.category === cat), ...staticAll.filter((q) => q.category === cat)];
-  const final = pool.length > 0 ? pool : staticAll; // fallback if theme filter empties pool
-  return shuffle(final).slice(0, Math.min(count, final.length));
+  const playerQ = playersToQuestions(filtered);
+
+  const needTrivia = cat === "all" || cat === "trivia";
+  const needGaruda = cat === "all" || cat === "garuda";
+  const [triviaItems, garudaItems] = await Promise.all([
+    needTrivia && !theme ? fetchQuizItems("trivia") : Promise.resolve([] as ApiQuizItem[]),
+    needGaruda && !theme ? fetchQuizItems("garuda") : Promise.resolve([] as ApiQuizItem[]),
+  ]);
+  const triviaQ = quizItemsToQuestions(triviaItems);
+  const garudaQ = quizItemsToQuestions(garudaItems);
+
+  let pool: Question[];
+  if (theme) {
+    // Themed challenges only operate on player-based questions.
+    pool = cat === "all" ? playerQ : playerQ.filter((q) => q.category === cat);
+  } else if (cat === "all") {
+    pool = [...playerQ, ...triviaQ, ...garudaQ];
+  } else if (cat === "guess" || cat === "history") {
+    pool = playerQ.filter((q) => q.category === cat);
+  } else if (cat === "trivia") {
+    pool = triviaQ;
+  } else if (cat === "garuda") {
+    pool = garudaQ;
+  } else {
+    pool = [];
+  }
+
+  return shuffle(pool).slice(0, Math.min(count, pool.length));
 }

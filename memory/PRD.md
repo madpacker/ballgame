@@ -9,6 +9,7 @@
 - **Celebration**: Terompet 📯 saat rekor skor baru.
 - **Admin branding**: Custom background global + info & 4 media sosial (IG, TikTok, WA, YouTube).
 - **Berita**: Admin posting artikel (judul, cover, body); user baca list + detail dengan pull-to-refresh.
+- **Soal admin-driven**: Semua `QUESTIONS` bawaan dihapus. Admin kelola Trivia Klub (format tebak gambar) & kategori baru Garuda Call via `/admin/quiz-items` dengan toggle ON/OFF per soal.
 
 ## Skema Poin Prediksi
 - 🎯 Tepat skor: **+300**
@@ -23,6 +24,7 @@
 - Match & Prediksi: `GET /matches`, `GET /live-match`, `POST /matches/{id}/predict` (now with scorer_player_id + motm_player_id), `GET /me/prediction/{id}`, `GET /predictions/leaderboard`, `POST /admin/matches/{id}/result` (now with scorer_player_ids list + motm_player_id)
 - App settings: `GET /app-settings`, `PUT /admin/app-settings` (description + socials), `POST/DELETE /admin/app-settings/background`
 - Berita: `GET /news`, `GET /news/{id}`, `POST /admin/news` (multipart), `PUT/DELETE /admin/news/{id}`
+- Soal Quiz (Trivia & Garuda): `GET /quiz-items?category=...`, `GET/POST /admin/quiz-items`, `PUT/DELETE /admin/quiz-items/{id}`, `POST /admin/quiz-items/{id}/image`
 
 ## Testing
-**176/176 pytest green** di `/app/backend/tests/` (+19 iter9 tests).
+**200/200 pytest green** (176 iter9 + 24 iter10) di `/app/backend/tests/`.

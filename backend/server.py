@@ -1324,9 +1324,42 @@ class NewsOut(BaseModel):
     author_picture: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    like_count: int = 0
+    comment_count: int = 0
+    liked: bool = False
 
 
-def _news_doc_to_out(d: dict) -> NewsOut:
+class CommentOut(BaseModel):
+    comment_id: str
+    news_id: str
+    user_id: str
+    name: str
+    picture: Optional[str] = None
+    body: str
+    created_at: datetime
+
+
+class CommentIn(BaseModel):
+    body: str
+
+
+async def _news_counts(news_id: str) -> tuple[int, int]:
+    like_count = await db.news_likes.count_documents({"news_id": news_id})
+    comment_count = await db.news_comments.count_documents(
+        {"news_id": news_id, "deleted_at": {"$exists": False}}
+    )
+    return like_count, comment_count
+
+
+async def _news_doc_to_out_async(d: dict, viewer_id: Optional[str] = None) -> NewsOut:
+    like_count, comment_count = await _news_counts(d["news_id"])
+    liked = False
+    if viewer_id:
+        liked = (
+            await db.news_likes.count_documents(
+                {"news_id": d["news_id"], "user_id": viewer_id}
+            )
+        ) > 0
     return NewsOut(
         news_id=d["news_id"],
         title=d["title"],
@@ -1337,11 +1370,51 @@ def _news_doc_to_out(d: dict) -> NewsOut:
         author_picture=d.get("author_picture"),
         created_at=d["created_at"],
         updated_at=d.get("updated_at"),
+        like_count=like_count,
+        comment_count=comment_count,
+        liked=liked,
     )
 
 
+def _news_doc_to_out(d: dict) -> NewsOut:
+    # Sync helper kept for admin create/update return paths where fresh counts (0) are fine.
+    return NewsOut(
+        news_id=d["news_id"],
+        title=d["title"],
+        excerpt=d.get("excerpt"),
+        body=d["body"],
+        cover_url=d.get("cover_url"),
+        author_name=d.get("author_name"),
+        author_picture=d.get("author_picture"),
+        created_at=d["created_at"],
+        updated_at=d.get("updated_at"),
+        like_count=0,
+        comment_count=0,
+        liked=False,
+    )
+
+
+async def _optional_user(authorization: Optional[str]) -> Optional[dict]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not session:
+        return None
+    expires = session.get("expires_at")
+    if isinstance(expires, datetime):
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires < datetime.now(timezone.utc):
+            return None
+    user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    return user
+
+
 @api_router.get("/news", response_model=List[NewsOut])
-async def news_list(limit: int = 50):
+async def news_list(limit: int = 50, authorization: Optional[str] = Header(default=None)):
+    viewer = await _optional_user(authorization)
+    viewer_id = viewer["user_id"] if viewer else None
     cursor = (
         db.news.find({"deleted_at": {"$exists": False}}, {"_id": 0})
         .sort("created_at", -1)
@@ -1349,18 +1422,20 @@ async def news_list(limit: int = 50):
     )
     results: List[NewsOut] = []
     async for d in cursor:
-        results.append(_news_doc_to_out(d))
+        results.append(await _news_doc_to_out_async(d, viewer_id))
     return results
 
 
 @api_router.get("/news/{news_id}", response_model=NewsOut)
-async def news_get(news_id: str):
+async def news_get(news_id: str, authorization: Optional[str] = Header(default=None)):
     doc = await db.news.find_one(
         {"news_id": news_id, "deleted_at": {"$exists": False}}, {"_id": 0}
     )
     if not doc:
         raise HTTPException(status_code=404, detail="news_not_found")
-    return _news_doc_to_out(doc)
+    viewer = await _optional_user(authorization)
+    viewer_id = viewer["user_id"] if viewer else None
+    return await _news_doc_to_out_async(doc, viewer_id)
 
 
 def _make_excerpt(body: str, limit: int = 160) -> str:
@@ -1445,6 +1520,340 @@ async def news_delete(news_id: str, user: dict = Depends(require_admin)):
     return {"ok": True}
 
 
+# ---------- News likes & comments ----------
+async def _news_exists(news_id: str) -> dict:
+    doc = await db.news.find_one(
+        {"news_id": news_id, "deleted_at": {"$exists": False}}, {"_id": 0}
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="news_not_found")
+    return doc
+
+
+@api_router.post("/news/{news_id}/like")
+async def news_like_toggle(news_id: str, user: dict = Depends(get_current_user)):
+    news_doc = await _news_exists(news_id)
+    existing = await db.news_likes.find_one(
+        {"news_id": news_id, "user_id": user["user_id"]}, {"_id": 0}
+    )
+    if existing:
+        await db.news_likes.delete_one(
+            {"news_id": news_id, "user_id": user["user_id"]}
+        )
+        liked = False
+    else:
+        await db.news_likes.insert_one(
+            {
+                "news_id": news_id,
+                "user_id": user["user_id"],
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
+        liked = True
+        # Notify author (not self-likes).
+        try:
+            author_id = news_doc.get("author_id")
+            if author_id and author_id != user["user_id"]:
+                await push_notification(
+                    author_id,
+                    "news_like",
+                    f"{user['name']} menyukai berita '{news_doc['title'][:40]}'.",
+                    from_user=user,
+                )
+        except Exception:
+            pass
+    like_count = await db.news_likes.count_documents({"news_id": news_id})
+    return {"liked": liked, "like_count": like_count}
+
+
+@api_router.get("/news/{news_id}/comments", response_model=List[CommentOut])
+async def news_comments_list(news_id: str, limit: int = 100):
+    await _news_exists(news_id)
+    cursor = (
+        db.news_comments.find(
+            {"news_id": news_id, "deleted_at": {"$exists": False}}, {"_id": 0}
+        )
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    out: List[CommentOut] = []
+    async for c in cursor:
+        out.append(
+            CommentOut(
+                comment_id=c["comment_id"],
+                news_id=c["news_id"],
+                user_id=c["user_id"],
+                name=c.get("name", "User"),
+                picture=c.get("picture"),
+                body=c["body"],
+                created_at=c["created_at"],
+            )
+        )
+    return out
+
+
+@api_router.post("/news/{news_id}/comments", response_model=CommentOut)
+async def news_comment_create(
+    news_id: str, body: CommentIn, user: dict = Depends(get_current_user)
+):
+    news_doc = await _news_exists(news_id)
+    text = (body.body or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="empty_comment")
+    if len(text) > 1000:
+        text = text[:1000]
+    doc = {
+        "comment_id": f"cm_{uuid.uuid4().hex[:12]}",
+        "news_id": news_id,
+        "user_id": user["user_id"],
+        "name": user["name"],
+        "picture": user.get("picture"),
+        "body": text,
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.news_comments.insert_one(doc)
+    # Notify author on new comments (not self).
+    try:
+        author_id = news_doc.get("author_id")
+        if author_id and author_id != user["user_id"]:
+            await push_notification(
+                author_id,
+                "news_comment",
+                f"{user['name']} berkomentar: '{text[:80]}'",
+                from_user=user,
+            )
+    except Exception:
+        pass
+    return CommentOut(
+        comment_id=doc["comment_id"],
+        news_id=doc["news_id"],
+        user_id=doc["user_id"],
+        name=doc["name"],
+        picture=doc.get("picture"),
+        body=doc["body"],
+        created_at=doc["created_at"],
+    )
+
+
+@api_router.delete("/news/comments/{comment_id}")
+async def news_comment_delete(comment_id: str, user: dict = Depends(get_current_user)):
+    c = await db.news_comments.find_one(
+        {"comment_id": comment_id, "deleted_at": {"$exists": False}}, {"_id": 0}
+    )
+    if not c:
+        raise HTTPException(status_code=404, detail="comment_not_found")
+    if c["user_id"] != user["user_id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="not_your_comment")
+    await db.news_comments.update_one(
+        {"comment_id": comment_id},
+        {"$set": {"deleted_at": datetime.now(timezone.utc)}},
+    )
+    return {"ok": True}
+
+
+# ---------- Quiz Items (Trivia Klub & Garuda Call) ----------
+ALLOWED_QUIZ_CATEGORIES = {"trivia", "garuda"}
+
+
+class QuizItemOut(BaseModel):
+    item_id: str
+    category: str
+    prompt: str
+    image_url: Optional[str] = None
+    options: List[str]
+    answer_index: int
+    active: bool = True
+    order_index: int = 0
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class QuizItemUpdateIn(BaseModel):
+    prompt: Optional[str] = None
+    options: Optional[List[str]] = None
+    answer_index: Optional[int] = None
+    active: Optional[bool] = None
+    order_index: Optional[int] = None
+
+
+def _quiz_item_to_out(d: dict) -> QuizItemOut:
+    return QuizItemOut(
+        item_id=d["item_id"],
+        category=d["category"],
+        prompt=d["prompt"],
+        image_url=d.get("image_url"),
+        options=d.get("options", []),
+        answer_index=int(d.get("answer_index", 0)),
+        active=bool(d.get("active", True)),
+        order_index=int(d.get("order_index", 0)),
+        created_at=d["created_at"],
+        updated_at=d.get("updated_at"),
+    )
+
+
+def _assert_category(category: str):
+    if category not in ALLOWED_QUIZ_CATEGORIES:
+        raise HTTPException(status_code=422, detail="invalid_category")
+
+
+@api_router.get("/quiz-items", response_model=List[QuizItemOut])
+async def quiz_items_public(category: str):
+    _assert_category(category)
+    cursor = db.quiz_items.find(
+        {
+            "category": category,
+            "active": True,
+            "deleted_at": {"$exists": False},
+        },
+        {"_id": 0},
+    ).sort([("order_index", 1), ("created_at", 1)])
+    out: List[QuizItemOut] = []
+    async for d in cursor:
+        out.append(_quiz_item_to_out(d))
+    return out
+
+
+@api_router.get("/admin/quiz-items", response_model=List[QuizItemOut])
+async def quiz_items_admin_list(category: str, user: dict = Depends(require_admin)):
+    _assert_category(category)
+    cursor = db.quiz_items.find(
+        {"category": category, "deleted_at": {"$exists": False}}, {"_id": 0}
+    ).sort([("order_index", 1), ("created_at", 1)])
+    out: List[QuizItemOut] = []
+    async for d in cursor:
+        out.append(_quiz_item_to_out(d))
+    return out
+
+
+@api_router.post("/admin/quiz-items", response_model=QuizItemOut)
+async def quiz_items_create(
+    category: str = Form(...),
+    prompt: str = Form(...),
+    option_a: str = Form(...),
+    option_b: str = Form(...),
+    option_c: str = Form(...),
+    option_d: str = Form(...),
+    answer_index: int = Form(...),
+    active: bool = Form(True),
+    order_index: int = Form(0),
+    image: Optional[UploadFile] = File(None),
+    user: dict = Depends(require_admin),
+):
+    _assert_category(category)
+    if answer_index < 0 or answer_index > 3:
+        raise HTTPException(status_code=422, detail="invalid_answer_index")
+    opts = [option_a.strip(), option_b.strip(), option_c.strip(), option_d.strip()]
+    if any(not o for o in opts):
+        raise HTTPException(status_code=422, detail="empty_option")
+    item_id = f"qi_{uuid.uuid4().hex[:12]}"
+    image_url = None
+    if image is not None:
+        content = await image.read()
+        if content:
+            ext = (image.filename or "img.jpg").rsplit(".", 1)[-1].lower()
+            if ext not in ("jpg", "jpeg", "png", "webp", "heic"):
+                ext = "jpg"
+            path = f"{APP_NAME}/uploads/{user['user_id']}/quiz_{item_id}.{ext}"
+            try:
+                await run_in_threadpool(
+                    put_object, path, content, image.content_type or f"image/{ext}"
+                )
+                image_url = f"/api/files/{path}"
+            except Exception as e:
+                logger.exception("quiz image upload failed: %s", e)
+                raise HTTPException(status_code=500, detail="image_upload_failed")
+    now = datetime.now(timezone.utc)
+    doc = {
+        "item_id": item_id,
+        "category": category,
+        "prompt": prompt.strip(),
+        "image_url": image_url,
+        "options": opts,
+        "answer_index": int(answer_index),
+        "active": bool(active),
+        "order_index": int(order_index),
+        "created_at": now,
+        "updated_at": now,
+        "created_by": user["user_id"],
+    }
+    await db.quiz_items.insert_one(doc)
+    return _quiz_item_to_out(doc)
+
+
+@api_router.put("/admin/quiz-items/{item_id}", response_model=QuizItemOut)
+async def quiz_items_update(
+    item_id: str, body: QuizItemUpdateIn, user: dict = Depends(require_admin)
+):
+    existing = await db.quiz_items.find_one(
+        {"item_id": item_id, "deleted_at": {"$exists": False}}, {"_id": 0}
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="item_not_found")
+    update: dict = {}
+    if body.prompt is not None:
+        update["prompt"] = body.prompt.strip()
+    if body.options is not None:
+        if len(body.options) != 4 or any(not o.strip() for o in body.options):
+            raise HTTPException(status_code=422, detail="invalid_options")
+        update["options"] = [o.strip() for o in body.options]
+    if body.answer_index is not None:
+        if body.answer_index < 0 or body.answer_index > 3:
+            raise HTTPException(status_code=422, detail="invalid_answer_index")
+        update["answer_index"] = int(body.answer_index)
+    if body.active is not None:
+        update["active"] = bool(body.active)
+    if body.order_index is not None:
+        update["order_index"] = int(body.order_index)
+    if update:
+        update["updated_at"] = datetime.now(timezone.utc)
+        await db.quiz_items.update_one({"item_id": item_id}, {"$set": update})
+    doc = await db.quiz_items.find_one({"item_id": item_id}, {"_id": 0})
+    return _quiz_item_to_out(doc)
+
+
+@api_router.post("/admin/quiz-items/{item_id}/image", response_model=QuizItemOut)
+async def quiz_items_set_image(
+    item_id: str,
+    image: UploadFile = File(...),
+    user: dict = Depends(require_admin),
+):
+    existing = await db.quiz_items.find_one(
+        {"item_id": item_id, "deleted_at": {"$exists": False}}, {"_id": 0}
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="item_not_found")
+    content = await image.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty_image")
+    ext = (image.filename or "img.jpg").rsplit(".", 1)[-1].lower()
+    if ext not in ("jpg", "jpeg", "png", "webp", "heic"):
+        ext = "jpg"
+    path = f"{APP_NAME}/uploads/{user['user_id']}/quiz_{item_id}_{uuid.uuid4().hex[:6]}.{ext}"
+    try:
+        await run_in_threadpool(put_object, path, content, image.content_type or f"image/{ext}")
+    except Exception as e:
+        logger.exception("quiz image upload failed: %s", e)
+        raise HTTPException(status_code=500, detail="image_upload_failed")
+    url = f"/api/files/{path}"
+    await db.quiz_items.update_one(
+        {"item_id": item_id},
+        {"$set": {"image_url": url, "updated_at": datetime.now(timezone.utc)}},
+    )
+    doc = await db.quiz_items.find_one({"item_id": item_id}, {"_id": 0})
+    return _quiz_item_to_out(doc)
+
+
+@api_router.delete("/admin/quiz-items/{item_id}")
+async def quiz_items_delete(item_id: str, user: dict = Depends(require_admin)):
+    res = await db.quiz_items.update_one(
+        {"item_id": item_id, "deleted_at": {"$exists": False}},
+        {"$set": {"deleted_at": datetime.now(timezone.utc)}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="item_not_found")
+    return {"ok": True}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -1495,6 +1904,11 @@ async def startup_indexes():
         await db.predictions.create_index("match_id")
         await db.news.create_index("news_id", unique=True)
         await db.news.create_index([("created_at", -1)])
+        await db.news_likes.create_index([("news_id", 1), ("user_id", 1)], unique=True)
+        await db.news_comments.create_index([("news_id", 1), ("created_at", -1)])
+        await db.news_comments.create_index("comment_id", unique=True)
+        await db.quiz_items.create_index("item_id", unique=True)
+        await db.quiz_items.create_index([("category", 1), ("active", 1), ("order_index", 1)])
     except Exception as e:
         logger.warning("index creation issue: %s", e)
 

@@ -171,7 +171,60 @@ export default function QuizScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (!current) return null;
+  if (!current) {
+    const isLoading = loadingBank;
+    return (
+      <View style={styles.container}>
+        {customBg && (
+          <>
+            <Image source={customBg} style={StyleSheet.absoluteFill} contentFit="cover" />
+            <LinearGradient
+              colors={["rgba(15,17,21,0.75)", "rgba(15,17,21,0.95)", colors.surface]}
+              style={StyleSheet.absoluteFill}
+            />
+          </>
+        )}
+        <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+          <Pressable testID="quit-button" onPress={() => router.replace("/")} hitSlop={10} style={styles.closeBtn}>
+            <Ionicons name="close" size={24} color={colors.onSurface} />
+          </Pressable>
+          <View style={styles.headerCenter}>
+            <Text style={styles.catTag}>{CATEGORY_LABEL[category]}</Text>
+          </View>
+          <View style={{ width: 32 }} />
+        </View>
+        <View style={styles.emptyWrap}>
+          <Ionicons
+            name={isLoading ? "hourglass-outline" : "alert-circle-outline"}
+            size={60}
+            color={colors.muted}
+          />
+          <Text style={styles.emptyTitle}>
+            {isLoading ? "Memuat soal..." : "Belum ada soal"}
+          </Text>
+          {!isLoading && (
+            <Text style={styles.emptyBody}>
+              Admin belum menambahkan soal untuk kategori{" "}
+              <Text style={{ color: colors.onSurface, fontWeight: "700" }}>
+                {CATEGORY_LABEL[category]}
+              </Text>
+              . Coba kategori lain atau minta admin menambahkan soal lewat dashboard.
+            </Text>
+          )}
+          {!isLoading && (
+            <Pressable
+              testID="back-to-category"
+              onPress={() => router.replace("/category")}
+              style={styles.emptyCta}
+            >
+              <Ionicons name="chevron-back" size={16} color={colors.onBrandPrimary} />
+              <Text style={styles.emptyCtaTxt}>PILIH KATEGORI LAIN</Text>
+            </Pressable>
+          )}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -391,4 +444,24 @@ const styles = StyleSheet.create({
     letterSpacing: 4,
     marginTop: spacing.md,
   },
+  emptyWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.md as number,
+    paddingHorizontal: spacing.xl,
+  },
+  emptyTitle: { color: colors.onSurface, fontSize: 18, fontWeight: "900", letterSpacing: 0.5 },
+  emptyBody: { color: colors.muted, fontSize: 14, textAlign: "center", lineHeight: 20 },
+  emptyCta: {
+    marginTop: spacing.lg,
+    backgroundColor: colors.brandPrimary,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    borderRadius: radius.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm as number,
+  },
+  emptyCtaTxt: { color: colors.onBrandPrimary, fontWeight: "900", fontSize: 13, letterSpacing: 1.5 },
 });

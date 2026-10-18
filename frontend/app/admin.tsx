@@ -44,6 +44,17 @@ type AdminNews = {
   created_at: string;
 };
 
+type AdminQuizItem = {
+  item_id: string;
+  category: "trivia" | "garuda";
+  prompt: string;
+  image_url?: string | null;
+  options: string[];
+  answer_index: number;
+  active: boolean;
+  order_index: number;
+};
+
 export default function AdminScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -88,6 +99,16 @@ export default function AdminScreen() {
   const [newsCover, setNewsCover] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [newsSubmitting, setNewsSubmitting] = useState(false);
 
+  // Quiz Items (Trivia & Garuda Call)
+  const [quizCat, setQuizCat] = useState<"trivia" | "garuda">("trivia");
+  const [quizItems, setQuizItems] = useState<AdminQuizItem[]>([]);
+  const [qiPrompt, setQiPrompt] = useState("");
+  const [qiOptions, setQiOptions] = useState<string[]>(["", "", "", ""]);
+  const [qiAnswer, setQiAnswer] = useState(0);
+  const [qiImage, setQiImage] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [qiSubmitting, setQiSubmitting] = useState(false);
+  const [qiEditId, setQiEditId] = useState<string | null>(null);
+
   useEffect(() => {
     setDescDraft(settings.description ?? "");
     setIgDraft(settings.socials?.instagram ?? "");
@@ -118,12 +139,32 @@ export default function AdminScreen() {
     } catch {
       setNews([]);
     }
+    try {
+      const qi = await api<AdminQuizItem[]>(`/admin/quiz-items?category=${quizCat}`);
+      setQuizItems(qi);
+    } catch {
+      setQuizItems([]);
+    }
   };
 
   useEffect(() => {
     if (user?.is_admin) refresh();
     else setLoading(false);
   }, [user]);
+
+  // Reload quiz-items only when user switches between Trivia / Garuda tab.
+  useEffect(() => {
+    if (!user?.is_admin) return;
+    (async () => {
+      try {
+        const qi = await api<AdminQuizItem[]>(`/admin/quiz-items?category=${quizCat}`);
+        setQuizItems(qi);
+      } catch {
+        setQuizItems([]);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quizCat]);
 
   if (!user) {
     return (
@@ -455,6 +496,148 @@ export default function AdminScreen() {
     try {
       await api(`/admin/news/${id}`, { method: "DELETE" });
       refresh();
+    } catch {}
+  };
+
+  // ---- Quiz Items (Trivia & Garuda) ----
+  const resetQiForm = () => {
+    setQiEditId(null);
+    setQiPrompt("");
+    setQiOptions(["", "", "", ""]);
+    setQiAnswer(0);
+    setQiImage(null);
+  };
+
+  const pickQiImage = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      setMsg({ kind: "err", txt: "Izin galeri ditolak." });
+      return;
+    }
+    const r = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.85,
+      allowsEditing: true,
+      aspect: [4, 3],
+    });
+    if (!r.canceled && r.assets[0]) setQiImage(r.assets[0]);
+  };
+
+  const startEditQi = (item: AdminQuizItem) => {
+    setQiEditId(item.item_id);
+    setQiPrompt(item.prompt);
+    setQiOptions([
+      item.options[0] || "",
+      item.options[1] || "",
+      item.options[2] || "",
+      item.options[3] || "",
+    ]);
+    setQiAnswer(item.answer_index);
+    setQiImage(null);
+  };
+
+  const submitQi = async () => {
+    const prompt = qiPrompt.trim();
+    const opts = qiOptions.map((o) => o.trim());
+    if (!prompt) {
+      setMsg({ kind: "err", txt: "Isi pertanyaan dulu." });
+      return;
+    }
+    if (opts.some((o) => !o)) {
+      setMsg({ kind: "err", txt: "Isi semua 4 pilihan jawaban." });
+      return;
+    }
+    setQiSubmitting(true);
+    try {
+      const token = await getToken();
+      if (qiEditId) {
+        // Update existing: send JSON for text; multipart separately for image.
+        await api(`/admin/quiz-items/${qiEditId}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            prompt,
+            options: opts,
+            answer_index: qiAnswer,
+          }),
+        });
+        if (qiImage) {
+          const res = await uploadForm(
+            `${BACKEND}/api/admin/quiz-items/${qiEditId}/image`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+              files: {
+                image: {
+                  uri: qiImage.uri,
+                  name: qiImage.fileName || `qi_${Date.now()}.jpg`,
+                  mimeType: qiImage.mimeType || "image/jpeg",
+                },
+              } as any,
+            },
+          );
+          if (!res.ok) throw new Error(await res.text());
+        }
+        setMsg({ kind: "ok", txt: "Soal diperbarui." });
+      } else {
+        const files = qiImage
+          ? {
+              image: {
+                uri: qiImage.uri,
+                name: qiImage.fileName || `qi_${Date.now()}.jpg`,
+                mimeType: qiImage.mimeType || "image/jpeg",
+              },
+            }
+          : {};
+        const res = await uploadForm(`${BACKEND}/api/admin/quiz-items`, {
+          headers: { Authorization: `Bearer ${token}` },
+          fields: {
+            category: quizCat,
+            prompt,
+            option_a: opts[0],
+            option_b: opts[1],
+            option_c: opts[2],
+            option_d: opts[3],
+            answer_index: String(qiAnswer),
+            active: "true",
+          },
+          files: files as any,
+        });
+        if (!res.ok) throw new Error(await res.text());
+        setMsg({ kind: "ok", txt: "Soal baru ditambahkan." });
+      }
+      resetQiForm();
+      // Reload list for current category.
+      const qi = await api<AdminQuizItem[]>(`/admin/quiz-items?category=${quizCat}`);
+      setQuizItems(qi);
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      setMsg({ kind: "err", txt: "Gagal menyimpan soal." });
+    } finally {
+      setQiSubmitting(false);
+    }
+  };
+
+  const toggleQi = async (item: AdminQuizItem) => {
+    try {
+      const updated = await api<AdminQuizItem>(
+        `/admin/quiz-items/${item.item_id}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ active: !item.active }),
+        },
+      );
+      setQuizItems((prev) =>
+        prev.map((x) => (x.item_id === item.item_id ? updated : x)),
+      );
+    } catch {
+      setMsg({ kind: "err", txt: "Gagal mengubah status soal." });
+    }
+  };
+
+  const deleteQi = async (id: string) => {
+    try {
+      await api(`/admin/quiz-items/${id}`, { method: "DELETE" });
+      setQuizItems((prev) => prev.filter((x) => x.item_id !== id));
+      if (qiEditId === id) resetQiForm();
     } catch {}
   };
 
@@ -845,7 +1028,228 @@ export default function AdminScreen() {
           </Pressable>
         </View>
 
-        {/* NEWS */}
+        {/* QUIZ ITEMS (Trivia Klub & Garuda Call) */}
+        <View style={styles.formCard}>
+          <View style={styles.qiHeader}>
+            <Text style={styles.sectionLabel}>SOAL QUIZ · {quizItems.length}</Text>
+            <View style={styles.segment}>
+              <Pressable
+                testID="qi-tab-trivia"
+                onPress={() => {
+                  setQuizCat("trivia");
+                  resetQiForm();
+                }}
+                style={[
+                  styles.segmentBtn,
+                  quizCat === "trivia" && styles.segmentBtnActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.segmentTxt,
+                    quizCat === "trivia" && styles.segmentTxtActive,
+                  ]}
+                >
+                  TRIVIA KLUB
+                </Text>
+              </Pressable>
+              <Pressable
+                testID="qi-tab-garuda"
+                onPress={() => {
+                  setQuizCat("garuda");
+                  resetQiForm();
+                }}
+                style={[
+                  styles.segmentBtn,
+                  quizCat === "garuda" && styles.segmentBtnActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.segmentTxt,
+                    quizCat === "garuda" && styles.segmentTxtActive,
+                  ]}
+                >
+                  GARUDA CALL
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <Pressable testID="pick-qi-image" onPress={pickQiImage} style={styles.photoPicker}>
+            {qiImage ? (
+              <Image source={qiImage.uri} style={styles.photoPreview} />
+            ) : qiEditId &&
+              quizItems.find((x) => x.item_id === qiEditId)?.image_url ? (
+              <Image
+                source={
+                  absoluteFileUrl(
+                    quizItems.find((x) => x.item_id === qiEditId)?.image_url || "",
+                  ) || ""
+                }
+                style={styles.photoPreview}
+              />
+            ) : (
+              <View style={styles.photoPlaceholder}>
+                <Ionicons name="image" size={32} color={colors.muted} />
+                <Text style={styles.photoHint}>
+                  Pilih gambar{" "}
+                  {quizCat === "trivia" ? "(untuk tebak gambar)" : "(opsional)"}
+                </Text>
+              </View>
+            )}
+          </Pressable>
+
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Pertanyaan</Text>
+            <TextInput
+              testID="qi-prompt-input"
+              value={qiPrompt}
+              onChangeText={setQiPrompt}
+              placeholder={
+                quizCat === "trivia"
+                  ? "mis. Siapa pemain ini? / Apa stadion ini?"
+                  : "mis. Kapten Timnas Indonesia saat lolos Piala Asia 2023?"
+              }
+              placeholderTextColor={colors.muted}
+              multiline
+              style={[styles.input, { minHeight: 72, textAlignVertical: "top" }]}
+            />
+          </View>
+
+          {qiOptions.map((opt, idx) => (
+            <View key={idx} style={styles.field}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm as number }}>
+                <Pressable
+                  testID={`qi-correct-${idx}`}
+                  onPress={() => setQiAnswer(idx)}
+                  style={[
+                    styles.correctBadge,
+                    qiAnswer === idx && styles.correctBadgeActive,
+                  ]}
+                  hitSlop={6}
+                >
+                  <Text
+                    style={[
+                      styles.correctBadgeTxt,
+                      qiAnswer === idx && styles.correctBadgeTxtActive,
+                    ]}
+                  >
+                    {String.fromCharCode(65 + idx)}
+                  </Text>
+                </Pressable>
+                <Text style={styles.fieldLabel}>
+                  Pilihan {String.fromCharCode(65 + idx)}
+                  {qiAnswer === idx ? " · JAWABAN BENAR" : ""}
+                </Text>
+              </View>
+              <TextInput
+                testID={`qi-option-${idx}`}
+                value={opt}
+                onChangeText={(v) =>
+                  setQiOptions((prev) => prev.map((p, i) => (i === idx ? v : p)))
+                }
+                placeholder={`Pilihan ${String.fromCharCode(65 + idx)}`}
+                placeholderTextColor={colors.muted}
+                style={styles.input}
+              />
+            </View>
+          ))}
+
+          <View style={{ flexDirection: "row", gap: spacing.sm as number }}>
+            <Pressable
+              testID="submit-qi"
+              onPress={submitQi}
+              disabled={qiSubmitting}
+              style={[styles.cta, { flex: 1 }, qiSubmitting && { opacity: 0.5 }]}
+            >
+              {qiSubmitting ? (
+                <ActivityIndicator color={colors.onBrandPrimary} />
+              ) : (
+                <>
+                  <Ionicons
+                    name={qiEditId ? "save" : "add-circle"}
+                    size={18}
+                    color={colors.onBrandPrimary}
+                  />
+                  <Text style={styles.ctaTxt}>
+                    {qiEditId ? "SIMPAN PERUBAHAN" : "TAMBAH SOAL"}
+                  </Text>
+                </>
+              )}
+            </Pressable>
+            {qiEditId && (
+              <Pressable
+                testID="cancel-qi-edit"
+                onPress={resetQiForm}
+                style={[styles.ctaSecondary, { flex: 1 }]}
+              >
+                <Text style={styles.ctaSecondaryTxt}>BATAL</Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
+
+        <View>
+          <Text style={styles.sectionLabel}>
+            DAFTAR SOAL {quizCat === "trivia" ? "TRIVIA KLUB" : "GARUDA CALL"}
+          </Text>
+          {quizItems.length === 0 && (
+            <Text style={styles.muted}>Belum ada soal. Tambahkan di atas.</Text>
+          )}
+          {quizItems.map((it, idx) => (
+            <View key={it.item_id} style={styles.playerRow}>
+              {it.image_url ? (
+                <Image
+                  source={absoluteFileUrl(it.image_url) || ""}
+                  style={styles.newsThumb}
+                />
+              ) : (
+                <View style={[styles.newsThumb, styles.playerAvatarFallback]}>
+                  <Ionicons name="help-circle" size={18} color={colors.muted} />
+                </View>
+              )}
+              <View style={{ flex: 1 }}>
+                <Text numberOfLines={2} style={styles.playerName}>
+                  {idx + 1}. {it.prompt}
+                </Text>
+                <Text style={styles.playerMeta}>
+                  Jawab: {String.fromCharCode(65 + it.answer_index)} ·{" "}
+                  {it.options[it.answer_index]?.slice(0, 30)}
+                </Text>
+              </View>
+              <Pressable
+                testID={`toggle-qi-${it.item_id}`}
+                onPress={() => toggleQi(it)}
+                hitSlop={6}
+                style={[styles.qiToggle, it.active && styles.qiToggleOn]}
+              >
+                <View
+                  style={[
+                    styles.qiToggleKnob,
+                    it.active && styles.qiToggleKnobOn,
+                  ]}
+                />
+              </Pressable>
+              <Pressable
+                testID={`edit-qi-${it.item_id}`}
+                onPress={() => startEditQi(it)}
+                hitSlop={8}
+              >
+                <Ionicons name="create-outline" size={20} color={colors.brandSecondary} />
+              </Pressable>
+              <Pressable
+                testID={`delete-qi-${it.item_id}`}
+                onPress={() => deleteQi(it.item_id)}
+                hitSlop={8}
+              >
+                <Ionicons name="trash" size={20} color={colors.error} />
+              </Pressable>
+            </View>
+          ))}
+        </View>
+
+        {/* POSTING BERITA BARU */}
         <View style={styles.formCard}>
           <Text style={styles.sectionLabel}>POSTING BERITA BARU</Text>
           <Pressable testID="pick-news-cover" onPress={pickNewsCover} style={styles.photoPicker}>
@@ -1177,6 +1581,69 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     backgroundColor: colors.surfaceTertiary,
   },
+  qiHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+    gap: spacing.sm as number,
+  },
+  segment: {
+    flexDirection: "row",
+    backgroundColor: colors.surfaceTertiary,
+    borderRadius: radius.pill,
+    padding: 3,
+  },
+  segmentBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+  },
+  segmentBtnActive: {
+    backgroundColor: colors.brandPrimary,
+  },
+  segmentTxt: {
+    color: colors.muted,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+  },
+  segmentTxtActive: { color: colors.onBrandPrimary },
+  correctBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  correctBadgeActive: {
+    backgroundColor: colors.success,
+    borderColor: colors.success,
+  },
+  correctBadgeTxt: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  correctBadgeTxtActive: { color: colors.onBrand },
+  qiToggle: {
+    width: 40,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceTertiary,
+    padding: 2,
+    justifyContent: "center",
+  },
+  qiToggleOn: { backgroundColor: colors.success },
+  qiToggleKnob: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.onBrandPrimary,
+  },
+  qiToggleKnobOn: { alignSelf: "flex-end" },
   playerRow: {
     flexDirection: "row",
     alignItems: "center",

@@ -16,6 +16,7 @@ const CATS: { key: CatKey; icon: any; color: string }[] = [
   { key: "guess", icon: "person-circle", color: colors.brandSecondary },
   { key: "history", icon: "book", color: colors.info },
   { key: "trivia", icon: "football", color: colors.success },
+  { key: "garuda", icon: "flag", color: colors.error },
 ];
 
 export default function CategoryScreen() {
