@@ -29,7 +29,7 @@ export const CATEGORY_DESC: Record<Category | "all", string> = {
   guess: "Tebak nama pemain dari foto",
   history: "Dari klub mana pemain ini berasal?",
   trivia: "Tebak gambar seputar klub Laskar Sape Kerap",
-  garuda: "Trivia Tim Nasional Garuda",
+  garuda: "Tebak pemain Timnas Indonesia (Garuda)",
 };
 
 // Stable background images used by the hero + quiz backdrops.

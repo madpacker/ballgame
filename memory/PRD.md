@@ -28,6 +28,7 @@
 - Berita Sosial: `POST /news/{id}/like` (toggle), `GET/POST /news/{id}/comments` (threaded + mentions), `DELETE /news/comments/{id}` (owner atau admin)
 - Mention: `GET /users/search?q=...` (public, max 8 hasil, prefix name/short_code)
 - Impor Soal: `POST /admin/quiz-items/import` (multipart CSV: prompt, option_a..d, answer_index, active?, image_url?)
+- Database Timnas: seeded 84 pemain era 2010-2026 via `backend/seed_timnas.py` (foto dari Transfermarkt CDN)
 
 ## Testing
-**245/245 pytest green** (176 iter9 + 24 iter10 + 21 iter11 + 24 iter12) di `/app/backend/tests/`.
+**253/253 pytest green** (176 iter9 + 24 iter10 + 21 iter11 + 24 iter12 + 8 iter13) di `/app/backend/tests/`.

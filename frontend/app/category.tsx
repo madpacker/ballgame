@@ -2,6 +2,7 @@ import { View, Text, Pressable, StyleSheet, ScrollView } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
+import { Image } from "expo-image";
 import { useEffect, useState } from "react";
 
 import { colors, radius, spacing } from "@/src/theme";
@@ -11,12 +12,28 @@ import { api } from "@/src/api";
 
 type CatKey = Category | "all";
 
-const CATS: { key: CatKey; icon: any; color: string }[] = [
+type CatEntry = {
+  key: CatKey;
+  // Either an Ionicons name OR a custom image asset (bundled logo).
+  icon?: any;
+  image?: any;
+  color: string;
+};
+
+const CATS: CatEntry[] = [
   { key: "all", icon: "shuffle", color: colors.brandPrimary },
   { key: "guess", icon: "person-circle", color: colors.brandSecondary },
   { key: "history", icon: "book", color: colors.info },
-  { key: "trivia", icon: "football", color: colors.success },
-  { key: "garuda", icon: "flag", color: colors.error },
+  {
+    key: "trivia",
+    image: require("@/assets/logos/mu.png"),
+    color: colors.surfaceTertiary,
+  },
+  {
+    key: "garuda",
+    image: require("@/assets/logos/garuda.png"),
+    color: colors.surfaceTertiary,
+  },
 ];
 
 export default function CategoryScreen() {
@@ -94,7 +111,15 @@ export default function CategoryScreen() {
                 ]}
               >
                 <View style={[styles.catIcon, { backgroundColor: c.color }]}>
-                  <Ionicons name={c.icon} size={28} color={colors.onBrand} />
+                  {c.image ? (
+                    <Image
+                      source={c.image}
+                      style={styles.catLogo}
+                      contentFit="contain"
+                    />
+                  ) : (
+                    <Ionicons name={c.icon} size={28} color={colors.onBrand} />
+                  )}
                 </View>
                 <Text style={styles.catTitle}>{CATEGORY_LABEL[c.key]}</Text>
                 <Text style={styles.catDesc}>{CATEGORY_DESC[c.key]}</Text>
@@ -182,7 +207,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: spacing.md,
+    overflow: "hidden",
   },
+  catLogo: { width: 40, height: 40 },
   catTitle: {
     color: colors.onSurface,
     fontWeight: "900",

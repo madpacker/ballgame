@@ -103,12 +103,93 @@
 #====================================================================================================
 
 user_problem_statement: |
-  Three social & admin productivity features in this iteration:
+  Request iterasi ini (dari user, Bahasa Indonesia):
+  1. Logo kategori:
+       - "Garuda Call" → logo lambang Garuda (file bundled: /app/frontend/assets/logos/garuda.png)
+       - "Trivia Klub" → logo Madura United (file bundled: /app/frontend/assets/logos/mu.png)
+  2. Isi database "pemain Timnas Indonesia" dari Transfermarkt (klub id 13958), era 2010-2026,
+     dan sulap kategori "Garuda Call" jadi format TEBAK GAMBAR PEMAIN TIMNAS INDONESIA dengan
+     foto + 4 pilihan jawaban. Admin masih bisa edit foto & pertanyaan via dashboard
+     /admin (sudah ter-wire ke endpoint /admin/quiz-items).
 
-  1. Threaded comment replies on news articles (max 1 level deep).
-  2. @user mentions in comments with autocomplete + automatic push notifications.
-  3. Bulk CSV import for Quiz Items (Trivia Klub & Garuda Call) so admin can create
-     20-30 soal in one go instead of filling the single-row form each time.
+frontend:
+  - task: "Category screen: show MU & Garuda logos"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/category.tsx, frontend/assets/logos/*"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          CATS entries for 'trivia' and 'garuda' now carry an `image` require() for
+          /assets/logos/mu.png and /assets/logos/garuda.png instead of an Ionicons name.
+          Card icon container renders an <Image contentFit="contain"/> when `image`
+          is set, falling back to Ionicons otherwise. CATEGORY_DESC.garuda updated to
+          "Tebak pemain Timnas Indonesia (Garuda)". Verified via screenshot: both
+          logos render correctly in the 2-col grid.
+
+backend:
+  - task: "Seed Timnas Indonesia players 2010-2026 as quiz_items (category=garuda)"
+    implemented: true
+    working: "NA"
+    file: "backend/seed_timnas.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Seeded 84 Timnas Indonesia players via `python3 seed_timnas.py --force`.
+          Players curated from two Transfermarkt pages:
+            - /indonesia/erweiterterkader/verein/13958/plus/1 (current + 18-mo window)
+            - /indonesia/kader/verein/13958/saison_id/2013 (2010-2015 era)
+          Each is stored as a quiz_items doc with:
+            category = "garuda"
+            prompt = "Siapa pemain Timnas Indonesia era {era} ini? ({position})"
+            image_url = "https://img.a.transfermarkt.technology/portrait/big/{...}.jpg|png?lm=1"
+            options = [correct, +3 random distractors from the same seed pool]
+            answer_index = index of correct answer (deterministic via Random(42))
+            active = True
+          Historical big names included: Boaz Solossa, Irfan Bachdim, Victor
+          Igbonefo, Stefano Lilipaly, Andik Vermansyah, Ahmad Bustomi, Firman Utina's
+          era (via Bustomi/Imanuel Wanggai etc.), plus every current Transfermarkt
+          extended-squad member (Jay Idzes, Marselino, Marc Klok, Sandy Walsh,
+          Elkan Baggott, Egy, Ragnar, etc.). Players without an actual Transfermarkt
+          portrait photo were intentionally omitted (quiz uses image guess).
+
+metadata:
+  created_by: "main_agent"
+  version: "1.5"
+  test_sequence: 13
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Seed Timnas Indonesia players 2010-2026 as quiz_items (category=garuda)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Please verify ONLY:
+      1. GET /api/quiz-items?category=garuda returns >= 80 items. Each item has
+         image_url starting with "https://img.a.transfermarkt.technology/portrait/",
+         exactly 4 options, answer_index in 0..3, active=true, and the correct
+         answer (options[answer_index]) matches a real Timnas player name.
+      2. Pick 5 random items, HEAD-request their image_url to confirm the
+         Transfermarkt CDN returns HTTP 200 (not 404).
+      3. GET /api/quiz-items?category=trivia is UNCHANGED (still empty / what was
+         there before — seed only touched garuda items).
+      4. Regression spot-check: /api/app-settings, /api/news, /api/scores still
+         respond 200 (short sanity, no deep tests needed).
+      Please skip frontend testing — the frontend changes are only two Image
+      logos on /category which were already verified visually via screenshot.
 
 backend:
   - task: "News comments threading + mentions"
