@@ -1,9 +1,9 @@
 import { View, Text, Pressable, StyleSheet, ScrollView, ActivityIndicator } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import Ionicons from "@react-native-vector-icons/ionicons";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { colors, radius, spacing } from "@/src/theme";
 import { useAuth } from "@/src/contexts/auth";
@@ -17,6 +17,7 @@ type Entry = {
   mode: string;
   correct: number;
   total: number;
+  games?: number;
 };
 
 const MODES: { key: "classic" | "time_attack"; label: string }[] = [
@@ -36,18 +37,29 @@ export default function Leaderboard() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    setLoading(true);
-    setErr(null);
-    const path =
-      scope === "weekly"
-        ? `/leaderboard/weekly?mode=${mode}&limit=50`
-        : `/leaderboard?mode=${mode}&scope=${scope}&limit=50`;
-    api<Entry[]>(path)
-      .then(setEntries)
-      .catch((e) => setErr(String(e)))
-      .finally(() => setLoading(false));
-  }, [mode, scope]);
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      setLoading(true);
+      setErr(null);
+      const path =
+        scope === "weekly"
+          ? `/leaderboard/weekly?mode=${mode}&limit=50`
+          : `/leaderboard?mode=${mode}&scope=${scope}&limit=50`;
+      const load = (silent: boolean) =>
+        api<Entry[]>(path)
+          .then((r) => active && setEntries(r))
+          .catch((e) => !silent && active && setErr(String(e)))
+          .finally(() => !silent && active && setLoading(false));
+      load(false);
+      // Live refresh so new points show up without leaving the screen.
+      const id = setInterval(() => load(true), 15000);
+      return () => {
+        active = false;
+        clearInterval(id);
+      };
+    }, [mode, scope]),
+  );
 
   const podium = entries.slice(0, 3);
   const rest = entries.slice(3);
@@ -112,6 +124,11 @@ export default function Leaderboard() {
           );
         })}
       </View>
+      <Text testID="leaderboard-hint" style={styles.hint}>
+        {mode === "classic"
+          ? "Classic: total poin akumulasi dari semua permainan"
+          : "Time Attack: skor tertinggi dalam satu permainan"}
+      </Text>
 
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + 100 }}
@@ -154,7 +171,7 @@ export default function Leaderboard() {
           <View style={styles.podium}>
             {[1, 0, 2].map((orderIdx, i) => {
               const p = podium[orderIdx];
-              if (!p) return <View key={i} style={styles.podiumSlot} />;
+              if (!p) return <View key={`empty-${i}`} style={styles.podiumSlot} />;
               const rank = orderIdx + 1;
               const h = rank === 1 ? 120 : rank === 2 ? 92 : 72;
               const ringColor =
@@ -191,7 +208,11 @@ export default function Leaderboard() {
             )}
             <View style={{ flex: 1 }}>
               <Text numberOfLines={1} style={styles.rowName}>{e.name}</Text>
-              <Text style={styles.rowSub}>{e.correct}/{e.total} benar</Text>
+              <Text style={styles.rowSub}>
+                {mode === "classic"
+                  ? `${e.games ?? 1}x main · ${e.correct} benar total`
+                  : `${e.correct}/${e.total} benar`}
+              </Text>
             </View>
             <Text style={styles.rowScore}>{e.score}</Text>
           </View>
@@ -233,6 +254,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     padding: 4,
   },
+  hint: { color: colors.muted, fontSize: 12, textAlign: "center", marginTop: spacing.sm },
   tab: { flex: 1, paddingVertical: 10, borderRadius: radius.sm, alignItems: "center" },
   tabActive: { backgroundColor: colors.brandPrimary },
   tabTxt: { color: colors.muted, fontWeight: "700", fontSize: 13 },

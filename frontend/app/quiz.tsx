@@ -21,12 +21,12 @@ import { api } from "@/src/api";
 import { absoluteFileUrl, useAppSettings } from "@/src/hooks/useAppSettings";
 import { LinearGradient } from "expo-linear-gradient";
 
-type Mode = "classic" | "time_attack";
-type CatKey = Category | "all";
+type Mode = "classic" | "time_attack" | "t_classic" | "t_time_attack";
+type CatKey = Category | "all" | "tournament";
 
-const CLASSIC_COUNT = 10;
-const TIME_SECONDS = 60;
 const POINT_PER_CORRECT = 100;
+const T_QUESTION_SECONDS = 20; // per-question timer in Tournament Classic
+const T_SPEED_BONUS_PER_SEC = 5; // up to +100 for an instant answer
 
 export default function QuizScreen() {
   const insets = useSafeAreaInsets();
@@ -36,13 +36,19 @@ export default function QuizScreen() {
   const customBg = absoluteFileUrl(settings.background_url);
   const params = useLocalSearchParams<{ mode: Mode; category: CatKey; theme?: string }>();
   const mode = (params.mode ?? "classic") as Mode;
-  const category = (params.category ?? "all") as CatKey;
-  const themeId = params.theme;
+  const isTournament = mode === "t_classic" || mode === "t_time_attack";
+  const category = (isTournament ? "tournament" : params.category ?? "all") as CatKey;
+  const themeId = isTournament ? undefined : params.theme;
+  const classicLike = mode === "classic" || mode === "t_classic";
+  const CLASSIC_COUNT = mode === "t_classic" ? 20 : 10;
+  const TIME_SECONDS = mode === "t_time_attack" ? 90 : 60;
+  const catLabel = category === "tournament" ? "TOURNAMENT" : CATEGORY_LABEL[category];
 
   const [queue, setQueue] = useState<Question[]>(() =>
-    pickQuestions(category, mode === "classic" ? CLASSIC_COUNT : 50),
+    category === "tournament" ? [] : pickQuestions(category, classicLike ? CLASSIC_COUNT : 50),
   );
   const [loadingBank, setLoadingBank] = useState(true);
+  const [closed, setClosed] = useState(false);
   const [index, setIndex] = useState(0);
   const [score, setScore] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
@@ -50,31 +56,51 @@ export default function QuizScreen() {
   const [showFlash, setShowFlash] = useState<"correct" | "wrong" | null>(null);
 
   const flashOpacity = useSharedValue(0);
+  const gameIdRef = useRef<string | null>(null);
   const finishedRef = useRef(false);
   const scoreRef = useRef(0);
   const correctRef = useRef(0);
-  const indexRef = useRef(0);
+  const answeredCountRef = useRef(0); // total questions answered (survives TA reshuffles)
 
   const current = queue[index];
-  const totalPlanned = mode === "classic" ? CLASSIC_COUNT : queue.length;
 
   // Keep refs in sync with latest state so finish() always reads fresh values
   // even when called from stale closures (timeouts / timer callbacks).
   scoreRef.current = score;
   correctRef.current = correctCount;
-  indexRef.current = index;
 
   // Time attack countdown
-  const timeLeft = useCountdown(TIME_SECONDS, mode === "time_attack", () => {
+  const timeLeft = useCountdown(TIME_SECONDS, !classicLike, () => {
     if (!finishedRef.current) finish();
   });
+
+  // Tournament Classic: 20s per question; time-out counts as a wrong answer.
+  const [qTimeLeft, setQTimeLeft] = useState(T_QUESTION_SECONDS);
+  const qTimeLeftRef = useRef(T_QUESTION_SECONDS);
+  qTimeLeftRef.current = qTimeLeft;
+  const chooseRef = useRef<(i: number) => void>(() => {});
+  useEffect(() => {
+    if (mode !== "t_classic" || !queue[index] || answered !== null) return;
+    setQTimeLeft(T_QUESTION_SECONDS);
+    const id = setInterval(() => {
+      setQTimeLeft((t) => {
+        if (t <= 1) {
+          clearInterval(id);
+          setTimeout(() => chooseRef.current(-1), 0);
+          return 0;
+        }
+        return t - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index, queue, answered === null]);
 
   const finish = (finalScore?: number, finalCorrect?: number) => {
     if (finishedRef.current) return;
     finishedRef.current = true;
     const useScore = finalScore ?? scoreRef.current;
     const useCorrect = finalCorrect ?? correctRef.current;
-    const useIndex = indexRef.current;
     router.replace({
       pathname: "/result",
       params: {
@@ -82,8 +108,9 @@ export default function QuizScreen() {
         category,
         score: String(useScore),
         correct: String(useCorrect),
-        total: String(mode === "classic" ? CLASSIC_COUNT : useCorrect + (useIndex - useCorrect)),
+        total: String(classicLike ? CLASSIC_COUNT : Math.max(answeredCountRef.current, useCorrect)),
         ...(params.challenge ? { challenge: String(params.challenge) } : {}),
+        ...(gameIdRef.current ? { game_id: gameIdRef.current } : {}),
       },
     });
   };
@@ -98,8 +125,13 @@ export default function QuizScreen() {
   const choose = (i: number) => {
     if (answered !== null) return;
     setAnswered(i);
+    answeredCountRef.current += 1;
     const correct = i === current.answerIndex;
-    const nextScore = correct ? score + POINT_PER_CORRECT : score;
+    const gained =
+      mode === "t_classic"
+        ? POINT_PER_CORRECT + Math.max(0, qTimeLeftRef.current) * T_SPEED_BONUS_PER_SEC
+        : POINT_PER_CORRECT;
+    const nextScore = correct ? score + gained : score;
     const nextCorrect = correct ? correctCount + 1 : correctCount;
     // Update refs immediately so TA timer / other timeouts see fresh values.
     scoreRef.current = nextScore;
@@ -116,8 +148,8 @@ export default function QuizScreen() {
     setTimeout(() => {
       if (finishedRef.current) return;
       // Advance
-      if (mode === "classic") {
-        if (index + 1 >= CLASSIC_COUNT) {
+      if (classicLike) {
+        if (index + 1 >= Math.min(CLASSIC_COUNT, queue.length)) {
           finish(nextScore, nextCorrect);
         } else {
           setIndex((v) => v + 1);
@@ -139,9 +171,16 @@ export default function QuizScreen() {
     }, 900);
   };
 
+  chooseRef.current = choose;
+
   // Animate timer width
   const timerStyle = useAnimatedStyle(() => {
-    const pct = mode === "time_attack" ? timeLeft / TIME_SECONDS : (index + 1) / CLASSIC_COUNT;
+    const pct =
+      mode === "t_classic"
+        ? qTimeLeft / T_QUESTION_SECONDS
+        : !classicLike
+          ? timeLeft / TIME_SECONDS
+          : (index + 1) / CLASSIC_COUNT;
     return { width: `${Math.max(0, Math.min(1, pct)) * 100}%` };
   });
 
@@ -150,6 +189,16 @@ export default function QuizScreen() {
   useEffect(() => {
     let active = true;
     (async () => {
+      if (isTournament) {
+        const st = await api<{ enabled: boolean }>("/tournament/status").catch(() => ({ enabled: false }));
+        if (!st.enabled) {
+          if (active) {
+            setClosed(true);
+            setLoadingBank(false);
+          }
+          return;
+        }
+      }
       let themeFilter: ThemeFilter | null = null;
       if (themeId) {
         try {
@@ -157,10 +206,16 @@ export default function QuizScreen() {
           if (t.id === themeId) themeFilter = { id: t.id, filter_type: t.filter_type, filter_value: t.filter_value };
         } catch {}
       }
-      const q = await pickDynamicQuestions(category, mode === "classic" ? CLASSIC_COUNT : 50, themeFilter);
+      const q = await pickDynamicQuestions(category, classicLike ? CLASSIC_COUNT : 50, themeFilter);
       if (active && q.length > 0) {
         setQueue(q);
         setIndex(0);
+        // One-time server ticket so this game's score can be submitted exactly once.
+        api<{ game_id: string }>("/games/start", { method: "POST", body: JSON.stringify({ mode }) })
+          .then((r) => {
+            gameIdRef.current = r.game_id;
+          })
+          .catch(() => {});
       }
       setLoadingBank(false);
     })();
@@ -171,7 +226,7 @@ export default function QuizScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (!current) {
+  if (!current || closed) {
     const isLoading = loadingBank;
     return (
       <View style={styles.container}>
@@ -189,24 +244,24 @@ export default function QuizScreen() {
             <Ionicons name="close" size={24} color={colors.onSurface} />
           </Pressable>
           <View style={styles.headerCenter}>
-            <Text style={styles.catTag}>{CATEGORY_LABEL[category]}</Text>
+            <Text style={styles.catTag}>{catLabel}</Text>
           </View>
           <View style={{ width: 32 }} />
         </View>
         <View style={styles.emptyWrap}>
           <Ionicons
-            name={isLoading ? "hourglass-outline" : "alert-circle-outline"}
+            name={closed ? "lock-closed" : isLoading ? "hourglass-outline" : "alert-circle-outline"}
             size={60}
             color={colors.muted}
           />
           <Text style={styles.emptyTitle}>
-            {isLoading ? "Memuat soal..." : "Belum ada soal"}
+            {closed ? "Tournament belum dibuka" : isLoading ? "Memuat soal..." : "Belum ada soal"}
           </Text>
-          {!isLoading && (
+          {!isLoading && !closed && (
             <Text style={styles.emptyBody}>
               Admin belum menambahkan soal untuk kategori{" "}
               <Text style={{ color: colors.onSurface, fontWeight: "700" }}>
-                {CATEGORY_LABEL[category]}
+                {catLabel}
               </Text>
               . Coba kategori lain atau minta admin menambahkan soal lewat dashboard.
             </Text>
@@ -214,11 +269,11 @@ export default function QuizScreen() {
           {!isLoading && (
             <Pressable
               testID="back-to-category"
-              onPress={() => router.replace("/category")}
+              onPress={() => router.replace(isTournament ? "/tournament" : "/category")}
               style={styles.emptyCta}
             >
               <Ionicons name="chevron-back" size={16} color={colors.onBrandPrimary} />
-              <Text style={styles.emptyCtaTxt}>PILIH KATEGORI LAIN</Text>
+              <Text style={styles.emptyCtaTxt}>{isTournament ? "KEMBALI KE TOURNAMENT" : "PILIH KATEGORI LAIN"}</Text>
             </Pressable>
           )}
         </View>
@@ -246,9 +301,13 @@ export default function QuizScreen() {
           <Ionicons name="close" size={24} color={colors.onSurface} />
         </Pressable>
         <View style={styles.headerCenter}>
-          <Text style={styles.catTag}>{CATEGORY_LABEL[category]}</Text>
+          <Text style={styles.catTag}>{catLabel}</Text>
           <Text testID="progress-text" style={styles.progress}>
-            {mode === "classic" ? `Q${index + 1}/${CLASSIC_COUNT}` : `${timeLeft}s · Q${index + 1}`}
+            {mode === "t_classic"
+              ? `${qTimeLeft}s · Q${index + 1}/${Math.min(CLASSIC_COUNT, queue.length)}`
+              : classicLike
+                ? `Q${index + 1}/${CLASSIC_COUNT}`
+                : `${timeLeft}s · Q${index + 1}`}
           </Text>
         </View>
         <View style={styles.scorePill}>
@@ -264,7 +323,9 @@ export default function QuizScreen() {
             timerStyle,
             {
               backgroundColor:
-                mode === "time_attack" && timeLeft <= 10 ? colors.error : accent.primary,
+                (!classicLike && timeLeft <= 10) || (mode === "t_classic" && qTimeLeft <= 5)
+                  ? colors.error
+                  : accent.primary,
             },
           ]}
         />

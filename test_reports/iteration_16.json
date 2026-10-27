@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 16 verified one-time game tickets and score validation. Backend: full pytest suite (-n 0) passed 281/281 in 61s. Frontend E2E at 375x667 with a seeded TEST user: (1) Classic game via UI -> /games/start 200, /scores 200, classic-total-card total=100. Reload -> /scores 409, 'Skor sesi ini sudah tercatat sebelumnya.' shown, DB still games=1 score=100. /leaderboard Classic shows TEST user with 100, which matches. A 2nd Classic game raised the total to 200 (cumulative works). (2) Crafted /result?mode=classic&score=5000&correct=10&total=10 without game_id -> no POST /scores, 'Skor sesi ini tidak bisa dikirim.' shown. With fake game_id -> 409 and 'sudah tercatat' shown. (3) Time Attack -> ticket + 200 submit, success message shown. (4) Tournament Classic (enabled temporarily with a TEST admin) -> 200, tournament-result-card shows 1390 and rank #1 with +10 Royal. Reload -> 409. Tournament was disabled again, all TEST data was cleaned up and 'Tos Joki' was not touched. Core fix works. Found 1 medium issue (Time Attack correct/total is wrong) and several minor ones.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/games/start + POST /api/scores", "issue": "Tickets are unlimited and have no minimum play time or rate limit. A script can call start->scores in a loop and add up to 1000 points (10 correct x 100) to the Classic cumulative total per call with no real play. The cap only limits the damage per call. Consider a minimum elapsed time (e.g. now - started_at >= N s) and/or a per-user rate limit."},
+      {"endpoint": "POST /api/challenges/{id}/complete", "issue": "Accepts any score from the client with no game ticket. A crafted /result?challenge=X&score=99999 marks the challenge as beaten and sends a notification to the challenger. This existed before this iteration but works around the same anti-cheat goal."},
+      {"endpoint": "POST /api/scores (tournament)", "issue": "The ticket is marked used before the tournament_closed 403 check, so the ticket is wasted. Harmless, noted for completeness."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "quiz.tsx finish() Time Attack total", "issue": "In Time Attack, total = useCorrect + (useIndex - useCorrect) = indexRef, and indexRef resets to 0 whenever the queue reshuffles. Observed URL: correct=16&total=7. result.tsx clamps total to max(total, correct), so the UI showed SALAH 0 and 100% accuracy, and the DB stored correct=16 total=16, even though many answers were wrong. Fix: keep an answeredCount ref that increments in choose() and use it as total.", "testID": "final-score", "priority": "MEDIUM"},
+      {"component": "result.tsx crafted URL", "issue": "Without a game_id the score is correctly not sent, but updateLocalHigh still runs. A crafted URL sets the local high score to 5000, shows 'REKOR BARU!' and plays the trumpet. Skip the local-high/record logic when there is no game_id, or when the submit returns 409 for a logged-in user.", "testID": "final-score", "priority": "LOW"},
+      {"component": "src/contexts/auth.tsx refreshFromToken", "issue": "Any error from /auth/me, including a network abort during navigation, calls setToken(null) and logs the user out. Reproduced: /auth/me was ERR_ABORTED, the token was wiped, then /games/start returned 401 and the result showed 'Masuk untuk kirim skor'. Only clear the token on 401.", "testID": "login-leaderboard-cta", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "result (409 / no game_id)", "issues": ["Two status cards appear together: the red 'sudah tercatat'/'tidak bisa dikirim' card AND a 'Skor tidak terkirim.' card with a green cloud-done icon. They repeat each other and the green success icon contradicts the error. Show a single card.", "After a reload, the Tournament card still renders with value '-'. Hide it or show a better state.", "The submit status/error cards have no testID (suggest submit-status, submit-error)."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter16_game_ticket.py", "/app/backend/tests/seed_iter16_fe.py", "/app/test_reports/pytest/pytest_iter16.xml"],
+  "action_items": [
+    "MEDIUM: Fix Time Attack total in quiz.tsx. Track the number of answered questions in a ref instead of using indexRef, which resets on reshuffle.",
+    "Consider a minimum play time and/or rate limit for game tickets, so scripted start->submit loops cannot inflate the Classic cumulative total.",
+    "Require a game ticket, or check against the ticket's submitted score, for /challenges/{id}/complete.",
+    "result.tsx: skip updateLocalHigh / REKOR BARU / trumpet when there is no game_id or the submit gets a 409. Combine the duplicate status cards and add testIDs submit-status / submit-error.",
+    "auth.tsx: only clear the stored token when /auth/me returns 401, not on network errors."
+  ],
+  "critical_code_review_comments": [
+    "Ticket consume uses an atomic find_one_and_update with user_id+mode+used=False. The race is safe and mode mismatch is rejected.",
+    "game_sessions has a TTL index (24h) and a unique game_id index. Good.",
+    "server.py is 2610 lines; it should be split into routers (scores, tournament, admin, news, etc.).",
+    "Earlier test files (iter14/iter15) did not clean up game_sessions for TEST_ users (56 orphan tickets). The tester removed them; their fixtures should add game_sessions to cleanup."
+  ],
+  "updated_files": ["/app/backend/tests/seed_iter16_fe.py (new helper: seed|state|cleanup for FE E2E users)"],
+  "success_rate": {"backend": "100% (281/281)", "frontend": "100% of requested flows pass; 1 medium pre-existing data bug in Time Attack total"},
+  "seed_data_creation": "TEST_fe16_player and TEST_fe16_admin (tokens TEST_tok_fe16_player / TEST_tok_fe16_admin) were created with seed_iter16_fe.py and then fully cleaned up. The tournament was enabled briefly and is disabled again (verified enabled=false).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "For FE auth: open the app, wait about 3s, set localStorage 'cakmad.session_token', goto '/', wait 4s, then go to /quiz. Navigating too fast aborts /auth/me, and auth.tsx then wipes the token. Use `python /app/backend/tests/seed_iter16_fe.py seed|state|cleanup`. Admin toggle: PUT /api/admin/tournament {enabled}. Writing to frontend source via bash was blocked by the harness.",
+  "rca_of_issue": "TA total bug: quiz.tsx finish() computes total from indexRef.current, which is set back to 0 by setIndex(0) when the 50-question queue runs out and reshuffles. Wrong answers are therefore lost, and result.tsx's Math.max(total, correct) hides this as 100% accuracy."
+}

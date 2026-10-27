@@ -32,3 +32,14 @@
 
 ## Testing
 **253/253 pytest green** (176 iter9 + 24 iter10 + 21 iter11 + 24 iter12 + 8 iter13) di `/app/backend/tests/`.
+
+## Update (Oct 2026) — Tournament + Classic Kumulatif
+- Tournament mode: admin toggle (PUT /api/admin/tournament), locked button when OFF.
+  - Classic (t_classic): 20 soal campuran (Tebak Pemain+Trivia+Garuda), 20 dtk/soal, 100 + 5/dtk sisa; leaderboard KUMULATIF.
+  - Time Attack (t_time_attack): 90 dtk, 100/benar, leaderboard HIGH SCORE.
+  - Royal: misi harian (like 5x5, komentar 10x3, main Classic 10x3, main TA 5x3, video 20x1 setelah admin approve), leaderboard Royal.
+  - Endpoints: /api/tournament/status|me|leaderboard, /api/royal/videos, /api/admin/royal/videos[/id/review].
+- Normal Classic leaderboard now CUMULATIVE (best_scores $inc, games count); weekly classic = sum of week. One-time migration summed past classic scores.
+- Anti-cheat: POST /api/games/start returns one-time game_id required by POST /api/scores (409 on reuse); score/correct/total validated & capped.
+- Min play time enforced on /scores (classic ≥0.8s/question, TA ≥50s, T-TA ≥80s). TA total now counts answered questions.
+- Backlog: challenge completion (/challenges/{id}/complete) not yet ticket-protected.

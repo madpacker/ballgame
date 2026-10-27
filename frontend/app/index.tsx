@@ -238,6 +238,41 @@ export default function Home() {
           <Ionicons name="chevron-forward" size={22} color={colors.muted} />
         </Pressable>
 
+        <Pressable
+          testID="mode-tournament-button"
+          onPress={() => {
+            if (Platform.OS !== "web") Haptics.selectionAsync();
+            router.push("/tournament");
+          }}
+          style={({ pressed }) => [
+            styles.modeCard,
+            { borderColor: colors.brandSecondary },
+            !settings.tournament_enabled && { opacity: 0.6 },
+            pressed && styles.cardPressed,
+          ]}
+        >
+          <View style={[styles.modeIcon, { backgroundColor: colors.brandSecondary }]}>
+            <Ionicons
+              name={settings.tournament_enabled ? "medal" : "lock-closed"}
+              size={28}
+              color={colors.onBrandSecondary}
+            />
+          </View>
+          <View style={styles.modeInfo}>
+            <Text style={styles.modeTitle}>TOURNAMENT</Text>
+            <Text style={styles.modeDesc}>
+              {settings.tournament_enabled
+                ? "Classic · Time Attack · Royal — rebut puncak klasemen!"
+                : "Terkunci · Tournament belum dibuka admin"}
+            </Text>
+          </View>
+          <Ionicons
+            name={settings.tournament_enabled ? "chevron-forward" : "lock-closed"}
+            size={20}
+            color={colors.muted}
+          />
+        </Pressable>
+
         <View style={styles.quickRow}>
           <Pressable
             testID="news-shortcut"

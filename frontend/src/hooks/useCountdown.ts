@@ -15,7 +15,8 @@ export function useCountdown(seconds: number, running: boolean, onDone?: () => v
           clearInterval(id);
           if (!doneRef.current) {
             doneRef.current = true;
-            onDone?.();
+            // Defer so parent state updates don't run during this render.
+            setTimeout(() => onDone?.(), 0);
           }
           return 0;
         }

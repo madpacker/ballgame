@@ -161,7 +161,7 @@ export async function fetchQuizItems(category: "trivia" | "garuda"): Promise<Api
 }
 
 export async function pickDynamicQuestions(
-  cat: Category | "all",
+  cat: Category | "all" | "tournament",
   count: number,
   theme?: ThemeFilter | null,
 ): Promise<Question[]> {
@@ -170,8 +170,9 @@ export async function pickDynamicQuestions(
   const filtered = filterPlayersByTheme(players, theme ?? null);
   const playerQ = playersToQuestions(filtered);
 
-  const needTrivia = cat === "all" || cat === "trivia";
-  const needGaruda = cat === "all" || cat === "garuda";
+  const mixed = cat === "all" || cat === "tournament";
+  const needTrivia = mixed || cat === "trivia";
+  const needGaruda = mixed || cat === "garuda";
   const [triviaItems, garudaItems] = await Promise.all([
     needTrivia && !theme ? fetchQuizItems("trivia") : Promise.resolve([] as ApiQuizItem[]),
     needGaruda && !theme ? fetchQuizItems("garuda") : Promise.resolve([] as ApiQuizItem[]),
@@ -183,6 +184,9 @@ export async function pickDynamicQuestions(
   if (theme) {
     // Themed challenges only operate on player-based questions.
     pool = cat === "all" ? playerQ : playerQ.filter((q) => q.category === cat);
+  } else if (cat === "tournament") {
+    // Tournament mix: Tebak Pemain + Trivia Klub + Garuda Call.
+    pool = [...playerQ.filter((q) => q.category === "guess"), ...triviaQ, ...garudaQ];
   } else if (cat === "all") {
     pool = [...playerQ, ...triviaQ, ...garudaQ];
   } else if (cat === "guess" || cat === "history") {

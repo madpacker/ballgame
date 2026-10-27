@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 15: Classic CUMULATIVE scoring. Backend: new suite test_iter15_classic_cumulative.py 8/9 pass; full regression 275/276 pass (only failure = new negative-score validation test). Verified: classic $inc (500+300=800, games/correct/total summed), time_attack still best-only, global + friends leaderboard sorted by total with games, live reorder after new submit, weekly classic = per-user SUM w/ games, weekly TA best-per-user, migration flag classic_cumulative_v1 present and NOT re-run after backend restart (Tos Joki 2525/3 games unchanged). Frontend (375px): result screen classic-total-card shows accumulated total after real Classic game (300 -> 500 after a 200 game); leaderboard hint text correct; rows show 'Nx main · N benar total' (rank 4+ only); 15s auto-refresh confirmed (5500 appeared without navigation). Regressions OK: Time Attack ends with no 'Cannot update a component' error; /quiz?mode=t_classic shows 'Tournament belum dibuka' lock; tournament result subtitle = 'Tournament Classic' only; PERINGKAT not clipped (scrollWidth==clientWidth); Royal tab fits. CRITICAL integrity issue found: reloading /result (or crafting the URL) re-submits the score, which now ADDS to the cumulative total.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/scores", "issue": "No input validation: score=-5000, correct=-1, total=-1 accepted (200) and decremented classic total (total_score -4100). Also no upper bound. With cumulative scoring, unbounded/negative scores directly corrupt the leaderboard.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "result.tsx score submit", "issue": "Score is read from URL params and auto-POSTed on mount. Reloading /result?mode=classic&score=150... re-submitted the same session (classic-total 150 -> 300). Anyone can also open /result?mode=classic&score=99999 to add arbitrary points. Previously harmless (best-only), now inflates cumulative total.", "testID": "classic-total", "priority": "CRITICAL"},
+      {"component": "leaderboard podium", "issue": "Duplicate React key '2' when <3 entries (empty slot key={i} collides with key={rank}) -> 'Encountered two children with the same key' red toast on web. FIXED by tester (key=`empty-${i}`).", "testID": "leaderboard-hint", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/leaderboard", "issues": ["Podium (top 3) does not show 'Nx main' games count; only rows #4+ show it, so on small boards the cumulative context isn't visible."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter15_classic_cumulative.py", "/app/backend/tests/seed_iter15_fe.py", "/app/test_reports/pytest/iter15.xml", "/app/test_reports/pytest/iter15_full.xml"],
+  "action_items": [
+    "CRITICAL: prevent duplicate/forged classic submissions — e.g. issue a server-side game session (POST /api/games/start -> game_id) and require game_id on POST /api/scores (one-time, idempotent), or at minimum a client nonce stored server-side with unique index + guard result.tsx against re-submit on reload (e.g. persist submitted nonce in storage / router.replace removing params).",
+    "HIGH: add Pydantic constraints in ScoreSubmit: score ge=0 and a sane max (e.g. le=per-question max * total), correct ge=0 le=total, total ge=1 le=50; reject 422 otherwise.",
+    "Optional: show games count on podium entries for Classic."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 2570 lines — should be split into routers (scores/leaderboard, tournament, news, admin).",
+    "_weekly_classic_totals and _migrate_classic_cumulative duplicate the same $group pipeline — extract a shared helper.",
+    "best_scores.name/picture only refresh on next submit; profile renames lag on leaderboard (pre-existing)."
+  ],
+  "updated_files": ["/app/frontend/app/leaderboard.tsx (podium empty-slot key fix)", "/app/backend/tests/test_iter15_classic_cumulative.py (new)", "/app/backend/tests/seed_iter15_fe.py (new helper)"],
+  "success_rate": {"backend": "99.6% (275/276; 8/9 new)", "frontend": "100% of requested flows; 1 critical integrity bug (resubmit on reload)"},
+  "seed_data_creation": "TEST_ users/sessions created in Mongo and fully cleaned (0 TEST_ users/scores/best_scores/sessions left). Tos Joki classic 2525/3 games untouched. tournament_enabled=false.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run pytest -n 0. Frontend auth: open site, wait ~2s, set localStorage 'cakmad.session_token', then page.goto target (setting it right after an immediate goto('/') sometimes didn't take). seed_iter15_fe.py create|extra|show|cleanup helps. Navigating to /result?... directly submits a score when logged in.",
+  "rca_of_issue": "Resubmit: result.tsx useEffect posts /scores whenever user && !submitted; 'submitted' is component state reset on every mount, and score/mode come from URL params, so reload/back-forward or crafted URLs resubmit. Backend has no game/session id or idempotency, and with $inc each submit adds to total. Repro: login, open /result?mode=classic&category=all&score=150&correct=3&total=10 twice -> classic-total 150 then 300."
+}

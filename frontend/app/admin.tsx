@@ -21,6 +21,7 @@ import { colors, radius, spacing } from "@/src/theme";
 import { useAuth } from "@/src/contexts/auth";
 import { api, getToken } from "@/src/api";
 import { uploadForm } from "@/src/utils/upload";
+import TournamentAdmin from "@/src/components/TournamentAdmin";
 import { absolutePhotoUrl, type ApiPlayer } from "@/src/data/questions";
 import { absoluteFileUrl, useAppSettings } from "@/src/hooks/useAppSettings";
 
@@ -737,6 +738,8 @@ export default function AdminScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+        <TournamentAdmin />
+
         <View style={styles.formCard}>
           <Text style={styles.sectionLabel}>TAMBAH PEMAIN BARU</Text>
 

@@ -12,6 +12,7 @@ export type AppSettings = {
   background_url?: string | null;
   description?: string | null;
   socials: Socials;
+  tournament_enabled?: boolean;
 };
 
 const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;

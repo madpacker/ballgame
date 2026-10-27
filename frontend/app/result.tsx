@@ -22,12 +22,13 @@ export default function ResultScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{
-    mode: "classic" | "time_attack";
+    mode: "classic" | "time_attack" | "t_classic" | "t_time_attack";
     category: string;
     score: string;
     correct: string;
     total: string;
     challenge?: string;
+    game_id?: string;
   }>();
 
   const score = parseInt(params.score || "0", 10) || 0;
@@ -37,6 +38,19 @@ export default function ResultScreen() {
   const category = params.category || "all";
   const challengeId = params.challenge;
   const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0;
+  const isTournament = mode === "t_classic" || mode === "t_time_attack";
+  const modeLabel =
+    mode === "t_classic"
+      ? "Tournament Classic"
+      : mode === "t_time_attack"
+        ? "Tournament Time Attack"
+        : mode === "classic"
+          ? "Classic"
+          : "Time Attack";
+  const catLabel =
+    category === "tournament"
+      ? "Tournament"
+      : CATEGORY_LABEL[category as keyof typeof CATEGORY_LABEL];
 
   const { user, refreshUser } = useAuth();
   const [personalHigh, setPersonalHigh] = useState(0);
@@ -46,8 +60,13 @@ export default function ResultScreen() {
   const [streakInfo, setStreakInfo] = useState<{ streak: number; bonus: number } | null>(null);
   const [challengeResult, setChallengeResult] = useState<{ beat: boolean; score_to_beat: number } | null>(null);
   const [createdChallenge, setCreatedChallenge] = useState<{ id: string; url: string } | null>(null);
+  const [tInfo, setTInfo] = useState<{ board_score: number; rank: number | null; royal_awarded: number; new_best: boolean } | null>(null);
+  const [submitErr, setSubmitErr] = useState<string | null>(null);
+  const [classicTotal, setClassicTotal] = useState<number | null>(null);
 
   useEffect(() => {
+    // Crafted result URLs (no game ticket) must not touch the local record either.
+    if (isTournament || (user && !params.game_id)) return;
     (async () => {
       const prev = (await getLocalHigh())[mode as "classic" | "time_attack"] ?? 0;
       const next = await updateLocalHigh(mode as "classic" | "time_attack", score);
@@ -63,17 +82,44 @@ export default function ResultScreen() {
 
   useEffect(() => {
     if (!user || submitted || submitting) return;
+    if (!params.game_id) {
+      setSubmitErr("Skor sesi ini tidak bisa dikirim.");
+      return;
+    }
     setSubmitting(true);
-    api<{ ok: boolean; score: number; streak: number; streak_bonus: number }>("/scores", {
+    api<{
+      ok: boolean;
+      score: number;
+      streak: number;
+      streak_bonus: number;
+      board_score?: number;
+      rank?: number | null;
+      royal_awarded?: number;
+      new_best?: boolean;
+      total_score?: number | null;
+    }>("/scores", {
       method: "POST",
-      body: JSON.stringify({ score, mode, category, correct, total }),
+      body: JSON.stringify({ game_id: params.game_id, score, mode, category, correct, total }),
     })
       .then((r) => {
         setSubmitted(true);
+        if (mode === "classic" && typeof r.total_score === "number") setClassicTotal(r.total_score);
+        if (isTournament && r.board_score !== undefined) {
+          setTInfo({
+            board_score: r.board_score,
+            rank: r.rank ?? null,
+            royal_awarded: r.royal_awarded ?? 0,
+            new_best: !!r.new_best,
+          });
+        }
         if (r.streak_bonus > 0) setStreakInfo({ streak: r.streak, bonus: r.streak_bonus });
         refreshUser().catch(() => {});
       })
-      .catch(() => {})
+      .catch((e) => {
+        if (String(e).includes("tournament_closed")) setSubmitErr("Tournament sedang ditutup admin. Skor tidak dihitung.");
+        else if (String(e).includes("409")) setSubmitErr("Skor sesi ini sudah tercatat sebelumnya.");
+        else setSubmitErr("Gagal mengirim skor. Periksa koneksi kamu.");
+      })
       .finally(() => setSubmitting(false));
     if (challengeId) {
       api<{ beat: boolean; score_to_beat: number }>(`/challenges/${challengeId}/complete`, {
@@ -86,7 +132,7 @@ export default function ResultScreen() {
   }, [user]);
 
   const share = async () => {
-    const msg = `Saya skor ${score} di Cak Mad Quiz · ${CATEGORY_LABEL[category as keyof typeof CATEGORY_LABEL]} · ${accuracy}% akurasi. Kamu bisa lebih tinggi? #CakMadQuiz #MaduraUnited`;
+    const msg = `Saya skor ${score} di Cak Mad Quiz · ${isTournament ? modeLabel : catLabel} · ${accuracy}% akurasi. Kamu bisa lebih tinggi? #CakMadQuiz #MaduraUnited`;
     try {
       if (Platform.OS === "web") {
         if (navigator.share) {
@@ -135,11 +181,11 @@ export default function ResultScreen() {
           style={StyleSheet.absoluteFill}
         />
         <Text style={styles.heroTag}>
-          {newRecord ? "REKOR BARU!" : "HASIL PERTANDINGAN"}
+          {newRecord || tInfo?.new_best ? "REKOR BARU!" : isTournament ? "HASIL TOURNAMENT" : "HASIL PERTANDINGAN"}
         </Text>
         <Text testID="final-score" style={styles.heroScore}>{score}</Text>
         <Text style={styles.heroSub}>
-          {CATEGORY_LABEL[category as keyof typeof CATEGORY_LABEL]} · {mode === "classic" ? "Classic" : "Time Attack"}
+          {isTournament ? modeLabel : `${catLabel} · ${modeLabel}`}
         </Text>
       </View>
 
@@ -162,24 +208,62 @@ export default function ResultScreen() {
           </View>
         </View>
 
-        <View style={styles.highlightCard}>
-          <View style={styles.highlightIcon}>
-            <Ionicons name="trophy" size={22} color={colors.onBrandSecondary} />
+        {isTournament && !tInfo && submitErr ? null : isTournament ? (
+          <View testID="tournament-result-card" style={styles.highlightCard}>
+            <View style={styles.highlightIcon}>
+              <Ionicons name="trophy" size={22} color={colors.onBrandSecondary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.highlightLabel}>
+                {mode === "t_classic" ? "TOTAL POIN KUMULATIF" : "HIGH SCORE TOURNAMENT"}
+                {tInfo?.rank ? ` · PERINGKAT #${tInfo.rank}` : ""}
+              </Text>
+              <Text style={styles.highlightValue}>{tInfo ? tInfo.board_score : "-"}</Text>
+              {!!tInfo?.royal_awarded && (
+                <Text style={styles.royalTxt}>👑 +{tInfo.royal_awarded} poin Royal</Text>
+              )}
+            </View>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.highlightLabel}>SKOR TERTINGGI LOKAL · {mode === "classic" ? "Classic" : "Time Attack"}</Text>
-            <Text style={styles.highlightValue}>{personalHigh}</Text>
+        ) : (
+          <View style={styles.highlightCard}>
+            <View style={styles.highlightIcon}>
+              <Ionicons name="trophy" size={22} color={colors.onBrandSecondary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.highlightLabel}>SKOR TERTINGGI LOKAL · {modeLabel}</Text>
+              <Text style={styles.highlightValue}>{personalHigh}</Text>
+            </View>
           </View>
-        </View>
+        )}
 
-        {user ? (
-          <View style={styles.statusCard}>
+        {classicTotal !== null && (
+          <View testID="classic-total-card" style={styles.highlightCard}>
+            <View style={styles.highlightIcon}>
+              <Ionicons name="podium" size={22} color={colors.onBrandSecondary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.highlightLabel}>TOTAL POIN CLASSIC (AKUMULASI)</Text>
+              <Text testID="classic-total" style={styles.highlightValue}>{classicTotal}</Text>
+              <Text style={styles.royalTxt}>+{score} dari sesi ini</Text>
+            </View>
+          </View>
+        )}
+
+        {submitErr && (
+          <View testID="submit-error-card" style={[styles.statusCard, { borderColor: colors.error }]}>
+            <Ionicons name="lock-closed" size={20} color={colors.error} />
+            <Text style={styles.statusTxt}>{submitErr}</Text>
+          </View>
+        )}
+
+        {user && !submitErr ? (
+          <View testID="submit-status-card" style={styles.statusCard}>
             <Ionicons name="cloud-done" size={20} color={colors.success} />
             <Text style={styles.statusTxt}>
               {submitted ? "Skor berhasil dikirim ke leaderboard." : "Mengirim skor ke leaderboard..."}
             </Text>
           </View>
-        ) : (
+        ) : user ? null : (
           <Pressable
             testID="login-leaderboard-cta"
             onPress={() => router.push("/login")}
@@ -225,20 +309,33 @@ export default function ResultScreen() {
       </ScrollView>
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + spacing.md }]}>
-        <Pressable
-          testID="rematch-button"
-          onPress={challengeFriend}
-          style={styles.rematchBtn}
-        >
-          <Ionicons name="flash" size={18} color={colors.onBrandSecondary} />
-          <Text style={styles.rematchTxt}>TANTANG TEMAN</Text>
-        </Pressable>
+        {isTournament ? (
+          <Pressable
+            testID="tournament-board-button"
+            onPress={() => router.replace("/tournament/leaderboard")}
+            style={styles.rematchBtn}
+          >
+            <Ionicons name="podium" size={16} color={colors.onBrandSecondary} />
+            <Text numberOfLines={1} style={[styles.rematchTxt, { fontSize: 11, letterSpacing: 0.5 }]}>
+              PERINGKAT
+            </Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            testID="rematch-button"
+            onPress={challengeFriend}
+            style={styles.rematchBtn}
+          >
+            <Ionicons name="flash" size={18} color={colors.onBrandSecondary} />
+            <Text style={styles.rematchTxt}>TANTANG TEMAN</Text>
+          </Pressable>
+        )}
         <Pressable testID="share-button" onPress={share} style={styles.secondaryBtn}>
           <Ionicons name="share-social" size={18} color={colors.onSurface} />
         </Pressable>
         <Pressable
           testID="play-again-button"
-          onPress={() => router.replace("/")}
+          onPress={() => router.replace(isTournament ? "/tournament" : "/")}
           style={styles.primaryBtn}
         >
           <Ionicons name="refresh" size={18} color={colors.onBrandPrimary} />
@@ -301,6 +398,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   highlightLabel: { color: colors.onBrandTertiary, fontSize: 11, letterSpacing: 1.5, fontWeight: "700" },
+  royalTxt: { color: colors.brandSecondary, fontWeight: "800", fontSize: 13, marginTop: 4 },
   highlightValue: { color: colors.brandSecondary, fontSize: 24, fontWeight: "900", marginTop: 2 },
   statusCard: {
     flexDirection: "row",

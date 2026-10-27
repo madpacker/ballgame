@@ -1,0 +1,43 @@
+{
+  "summary": "Tournament mode (Classic / Time Attack / Royal) tested end to end. Backend: 14 new pytest tests (test_iter14_tournament.py) all pass, plus the full regression suite passes (267/267 serially). Frontend (375x667): home TOURNAMENT card is locked when disabled; /tournament shows the locked card and disabled mode cards. When enabled, Classic runs 20 questions with a 20s per-question countdown; a timeout auto-advances as wrong. Classic result shows the cumulative card, rank and +10 Royal, and PERINGKAT goes to the leaderboard. Time Attack uses a 90s timer, auto-finishes and shows a HIGH SCORE card with +5 Royal. Royal missions, video submit (invalid URL, success, 2nd-same-day 429) and the 3 leaderboard tabs work. Admin toggle and approve work: +20 points and a notification were checked through the API. Garuda Call quiz loads questions. Remaining issues are all minor: setState-in-render warning on Time Attack expiry, quiz not gated when tournament is closed, PERINGKAT button clipped, no trivia items in DB. No deprecated Expo packages detected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "award_royal (server.py ~2206-2217)", "issue": "Daily-limit check (count_documents then insert) is not atomic. Concurrent like/comment/score requests can exceed daily_limit. Use a unique index on (user_id, mission, day_key, slot) or an atomic counter doc."},
+      {"endpoint": "POST /api/scores t_classic/t_time_attack", "issue": "play_classic / play_time_attack Royal points are awarded for any submit, even score=0 or correct=0 with total<20. Nothing checks that the game was actually finished (client-trusted). Acceptable for MVP; consider requiring total==20 for t_classic."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "useCountdown (src/hooks/useCountdown.ts:13-19)", "issue": "onDone() (finish -> router.replace) is called inside the setRemaining updater. When the 90s Time Attack timer ends, React logs a red-box error: 'Cannot update a component while rendering a different component ... QuizScreen'. Also affects normal Time Attack. Fix: call onDone outside the updater, e.g. setTimeout(() => onDone?.(), 0) or a useEffect on remaining===0.", "testID": "progress-text", "priority": "MEDIUM"},
+      {"component": "Quiz tournament gating (app/quiz.tsx:39-48)", "issue": "/quiz?mode=t_classic|t_time_attack does not check /tournament/status. If the tournament is disabled (deep link, or toggled mid-game), the user plays all 20 questions and only then sees 'Tournament sedang ditutup admin'. Check status on mount and show a locked state.", "testID": "option-0", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/result (tournament)", "issues": ["PERINGKAT button (tournament-board-button) is too narrow at 375px: the leading icon is clipped at the left edge and the label touches the border. Use flex:1 / smaller letterSpacing or an icon-only button.", "Subtitle reads 'Tournament · Tournament Classic' (label repeated)."]},
+      {"screen": "/tournament/leaderboard", "issues": ["The 'Royal 👑' tab pill extends slightly to the right edge of the tab container."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter14_tournament.py", "/app/test_reports/pytest/pytest_results_iter14.xml"],
+  "action_items": [
+    "Fix useCountdown: do not call onDone inside the setState updater (setState-in-render error when Time Attack expires).",
+    "Gate /quiz tournament modes on /api/tournament/status (show locked state or redirect to /tournament).",
+    "Fix PERINGKAT button clipping on the tournament result screen at 375px width.",
+    "Optional: make the award_royal daily limit atomic, and only award play_classic when a full 20-question game is submitted.",
+    "Data note: /api/quiz-items?category=trivia returns 0 items, so the Tournament mix is currently only Tebak Pemain + Garuda. Seed trivia items if a 3-way mix is expected."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 2478 lines. The Tournament block should move to its own router module (routers/tournament.py).",
+    "Tournament scores are kept out of best_scores. Verified: the normal /api/leaderboard is unaffected.",
+    "Like no-farming works through the ref=news_id dedupe. Unlike/re-like gives 0.",
+    "Rejected videos do not count toward the daily video limit, so a user can resubmit after rejection. This looks intended; confirm."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter14_tournament.py (new)"],
+  "success_rate": {"backend": "100% (14/14 new, 267/267 full suite)", "frontend": "~92% (all flows work; 1 console error on TA expiry, minor gating/design issues)"},
+  "seed_data_creation": "Temporary TEST_u_* users, TEST_tok_* sessions, and TEST_nw_* news created in Mongo, then fully deleted. tournament_enabled restored to False. The real admin (user_5fad4ee9ce78) was only used for toggle/review; no tournament data was left on it.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run test_iter14_tournament.py serially (-n 0): pytest.ini enables xdist and the tests share the global tournament toggle. For the frontend, set the token with page.add_init_script(\"localStorage.setItem('cakmad.session_token', ...)\"). Setting it via evaluate+reload did not persist in the automation tool. Sessions can be inserted directly into user_sessions.",
+  "rca_of_issue": "setState-in-render: useCountdown runs the onDone side effect (router.replace) inside the functional setState updater, which React runs during render. Repro: open /quiz?mode=t_time_attack&category=tournament and wait 90s; the error appears in the console and as a toast on /result."
+}

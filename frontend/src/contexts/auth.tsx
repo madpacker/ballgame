@@ -59,8 +59,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const me = await api<User>("/auth/me");
       setUser(me);
-    } catch {
-      await setToken(null);
+    } catch (e) {
+      // Only drop the saved login when the server actually rejects it.
+      if (String(e).includes("unauthorized")) await setToken(null);
       setUser(null);
     }
   };

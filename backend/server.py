@@ -103,12 +103,25 @@ class SessionExchangeOut(BaseModel):
     user: UserOut
 
 
+GameMode = Literal["classic", "time_attack", "t_classic", "t_time_attack"]
+
+
 class ScoreSubmit(BaseModel):
-    score: int
-    mode: Literal["classic", "time_attack"]
-    category: str
-    correct: int
-    total: int
+    game_id: str = Field(min_length=4, max_length=64)
+    score: int = Field(ge=0, le=50000)
+    mode: GameMode
+    category: str = Field(max_length=40)
+    correct: int = Field(ge=0, le=500)
+    total: int = Field(ge=0, le=500)
+
+
+class GameStartIn(BaseModel):
+    mode: GameMode
+
+
+# Max questions / points per correct answer for normal modes (anti-cheat caps).
+CLASSIC_MAX_Q = 10
+NORMAL_POINT = 100
 
 
 class LeaderboardEntry(BaseModel):
@@ -120,6 +133,7 @@ class LeaderboardEntry(BaseModel):
     category: str
     correct: int
     total: int
+    games: int = 1
     created_at: datetime
 
 
@@ -294,8 +308,44 @@ async def auth_logout(authorization: Optional[str] = Header(default=None)):
 
 
 # ---------- Scores & Leaderboard ----------
+@api_router.post("/games/start")
+async def games_start(body: GameStartIn, user: dict = Depends(get_current_user)):
+    game_id = f"gm_{uuid.uuid4().hex}"
+    await db.game_sessions.insert_one({
+        "game_id": game_id, "user_id": user["user_id"], "mode": body.mode,
+        "used": False, "started_at": datetime.now(timezone.utc),
+    })
+    return {"game_id": game_id}
+
+
 @api_router.post("/scores")
 async def submit_score(body: ScoreSubmit, user: dict = Depends(get_current_user)):
+    if body.correct > body.total:
+        raise HTTPException(status_code=422, detail="correct_exceeds_total")
+    if body.mode in ("t_classic", "t_time_attack") and not await _tournament_enabled():
+        raise HTTPException(status_code=403, detail="tournament_closed")
+    # One-time game ticket: blocks reload/duplicate submits and crafted result URLs.
+    ticket = await db.game_sessions.find_one_and_update(
+        {"game_id": body.game_id, "user_id": user["user_id"], "mode": body.mode, "used": False},
+        {"$set": {"used": True, "used_at": datetime.now(timezone.utc)}},
+    )
+    if not ticket:
+        raise HTTPException(status_code=409, detail="invalid_or_used_game")
+    started = ticket["started_at"]
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    # Minimum realistic play time: timed modes run their full clock, question modes ~1s/answer.
+    min_secs = {"time_attack": 50, "t_time_attack": 80}.get(body.mode, body.total * 0.8)
+    if elapsed < min_secs:
+        raise HTTPException(status_code=422, detail="game_too_fast")
+    if body.mode == "classic":
+        body.total = min(body.total, CLASSIC_MAX_Q)
+        body.correct = min(body.correct, body.total)
+    if body.mode in ("classic", "time_attack"):
+        body.score = min(body.score, body.correct * NORMAL_POINT)
+    if body.mode in ("t_classic", "t_time_attack"):
+        return await _submit_tournament_score(body, user)
     now = datetime.now(timezone.utc)
     # ---- Streak update ----
     today = now.date()
@@ -375,28 +425,50 @@ async def submit_score(body: ScoreSubmit, user: dict = Depends(get_current_user)
         await _ensure_weekly_rollover()
     except Exception as e:
         logger.warning("rollover error: %s", e)
-    best = await db.best_scores.find_one(
-        {"user_id": user["user_id"], "mode": body.mode}, {"_id": 0}
-    )
-    if (best is None) or (best.get("score", 0) < doc["score"]):
-        await db.best_scores.update_one(
-            {"user_id": user["user_id"], "mode": body.mode},
+    total_score = None
+    if body.mode == "classic":
+        # Classic = cumulative: every finished session adds to the user's running total.
+        row = await db.best_scores.find_one_and_update(
+            {"user_id": user["user_id"], "mode": "classic"},
             {
                 "$set": {
                     "user_id": user["user_id"],
                     "name": user["name"],
                     "picture": user.get("picture"),
-                    "score": doc["score"],
-                    "mode": body.mode,
+                    "mode": "classic",
                     "category": body.category,
-                    "correct": doc["correct"],
-                    "total": doc["total"],
                     "created_at": doc["created_at"],
-                }
+                },
+                "$inc": {"score": doc["score"], "correct": doc["correct"], "total": doc["total"], "games": 1},
             },
             upsert=True,
+            return_document=True,
+            projection={"_id": 0},
         )
-    return {"ok": True, "score": doc["score"], "streak": current, "streak_bonus": streak_bonus, "streak_milestone": streak_milestone, "live_bonus": live_bonus}
+        total_score = int(row.get("score", 0))
+    else:
+        best = await db.best_scores.find_one(
+            {"user_id": user["user_id"], "mode": body.mode}, {"_id": 0}
+        )
+        if (best is None) or (best.get("score", 0) < doc["score"]):
+            await db.best_scores.update_one(
+                {"user_id": user["user_id"], "mode": body.mode},
+                {
+                    "$set": {
+                        "user_id": user["user_id"],
+                        "name": user["name"],
+                        "picture": user.get("picture"),
+                        "score": doc["score"],
+                        "mode": body.mode,
+                        "category": body.category,
+                        "correct": doc["correct"],
+                        "total": doc["total"],
+                        "created_at": doc["created_at"],
+                    }
+                },
+                upsert=True,
+            )
+    return {"ok": True, "score": doc["score"], "total_score": total_score, "streak": current, "streak_bonus": streak_bonus, "streak_milestone": streak_milestone, "live_bonus": live_bonus}
 
 
 @api_router.get("/leaderboard", response_model=List[LeaderboardEntry])
@@ -701,13 +773,15 @@ async def _ensure_weekly_rollover():
     if last_key:
         # Snapshot top-3 per mode for last_key.
         for mode in ("classic", "time_attack"):
-            cursor = (
-                db.scores.find({"mode": mode, "week_key": last_key}, {"_id": 0})
-                .sort("score", -1)
-            )
+            if mode == "classic":
+                ranked = await _weekly_classic_totals(last_key, 3)
+            else:
+                ranked = await db.scores.find(
+                    {"mode": mode, "week_key": last_key}, {"_id": 0}
+                ).sort("score", -1).to_list(500)
             seen = set()
             rank = 0
-            async for s in cursor:
+            for s in ranked:
                 if s["user_id"] in seen:
                     continue
                 seen.add(s["user_id"])
@@ -758,6 +832,9 @@ async def weekly_leaderboard(mode: str = "classic", limit: int = 50):
     await _ensure_weekly_rollover()
     cur_key = _week_key(datetime.now(timezone.utc))
     # Highest score per user within current week.
+    if mode == "classic":
+        rows = await _weekly_classic_totals(cur_key, limit)
+        return [LeaderboardEntry(**r) for r in rows]
     cursor = db.scores.find({"mode": mode, "week_key": cur_key}, {"_id": 0}).sort("score", -1)
     best_per_user: dict[str, dict] = {}
     async for s in cursor:
@@ -766,6 +843,33 @@ async def weekly_leaderboard(mode: str = "classic", limit: int = 50):
             best_per_user[uid] = s
     results = [LeaderboardEntry(**v) for v in list(best_per_user.values())[:limit]]
     return results
+
+
+async def _weekly_classic_totals(week_key: str, limit: int = 50) -> list:
+    """Classic weekly board = sum of every Classic session played that week."""
+    pipeline = [
+        {"$match": {"mode": "classic", "week_key": week_key}},
+        {"$sort": {"created_at": 1}},
+        {"$group": {
+            "_id": "$user_id",
+            "name": {"$last": "$name"},
+            "picture": {"$last": "$picture"},
+            "category": {"$last": "$category"},
+            "score": {"$sum": "$score"},
+            "correct": {"$sum": "$correct"},
+            "total": {"$sum": "$total"},
+            "games": {"$sum": 1},
+            "created_at": {"$last": "$created_at"},
+        }},
+        {"$sort": {"score": -1}},
+        {"$limit": limit},
+    ]
+    out = []
+    async for r in db.scores.aggregate(pipeline):
+        r["user_id"] = r.pop("_id")
+        r["mode"] = "classic"
+        out.append(r)
+    return out
 
 
 class BadgeOut(BaseModel):
@@ -1231,6 +1335,7 @@ class AppSettingsOut(BaseModel):
     background_url: Optional[str] = None
     description: Optional[str] = None
     socials: SocialLinks = Field(default_factory=SocialLinks)
+    tournament_enabled: bool = False
 
 
 class AppSettingsIn(BaseModel):
@@ -1249,6 +1354,7 @@ def _settings_to_out(doc: dict) -> AppSettingsOut:
         background_url=doc.get("background_url"),
         description=doc.get("description"),
         socials=SocialLinks(**socials),
+        tournament_enabled=bool(doc.get("tournament_enabled", False)),
     )
 
 
@@ -1570,8 +1676,14 @@ async def news_like_toggle(news_id: str, user: dict = Depends(get_current_user))
                 )
         except Exception:
             pass
+    royal = 0
+    if liked:
+        try:
+            royal = await award_royal(user, "like_news", ref=news_id)
+        except Exception as e:
+            logger.warning("royal like error: %s", e)
     like_count = await db.news_likes.count_documents({"news_id": news_id})
-    return {"liked": liked, "like_count": like_count}
+    return {"liked": liked, "like_count": like_count, "royal_awarded": royal}
 
 
 @api_router.get("/news/{news_id}/comments", response_model=List[CommentOut])
@@ -1759,6 +1871,11 @@ async def news_comment_create(
             notified.add(uid)
         except Exception:
             pass
+
+    try:
+        await award_royal(user, "comment_news", ref=doc["comment_id"])
+    except Exception as e:
+        logger.warning("royal comment error: %s", e)
 
     return CommentOut(
         comment_id=doc["comment_id"],
@@ -2117,6 +2234,278 @@ async def quiz_items_import(
     )
 
 
+# ---------- Tournament (Classic / Time Attack / Royal) ----------
+WIB = timezone(timedelta(hours=7))
+TOURNAMENT_BOARDS = {"classic", "time_attack", "royal"}
+T_CLASSIC_COUNT = 20
+T_CLASSIC_MAX_PER_Q = 200  # 100 base + up to 100 speed bonus
+T_TA_POINT = 100
+
+ROYAL_MISSIONS: dict = {
+    "like_news": {"title": "Like Berita", "desc": "Sukai berita Madura United", "points": 5, "daily_limit": 5, "icon": "heart"},
+    "comment_news": {"title": "Komentar Berita", "desc": "Tulis komentar di berita", "points": 10, "daily_limit": 3, "icon": "chatbubble-ellipses"},
+    "play_classic": {"title": "Main Tournament Classic", "desc": "Selesaikan 20 soal Classic", "points": 10, "daily_limit": 3, "icon": "trophy"},
+    "play_time_attack": {"title": "Main Tournament Time Attack", "desc": "Selesaikan 1 ronde 90 detik", "points": 5, "daily_limit": 3, "icon": "timer"},
+    "submit_video": {"title": "Kirim Link Video", "desc": "Video dukungan untuk MU (disetujui admin)", "points": 20, "daily_limit": 1, "icon": "videocam"},
+}
+
+
+def _day_key(dt: Optional[datetime] = None) -> str:
+    return (dt or datetime.now(timezone.utc)).astimezone(WIB).strftime("%Y-%m-%d")
+
+
+async def _tournament_enabled() -> bool:
+    doc = await _load_app_settings()
+    return bool(doc.get("tournament_enabled", False))
+
+
+async def _board_add(board: str, user: dict, *, inc: Optional[int] = None, best: Optional[int] = None,
+                     correct: int = 0, total: int = 0) -> int:
+    """Update a tournament board row. `inc` = cumulative add, `best` = keep highest. Returns new board score."""
+    now = datetime.now(timezone.utc)
+    base_set = {"board": board, "user_id": user["user_id"], "name": user["name"],
+                "picture": user.get("picture"), "updated_at": now}
+    if inc is not None:
+        doc = await db.tournament_boards.find_one_and_update(
+            {"board": board, "user_id": user["user_id"]},
+            {"$set": base_set, "$inc": {"score": int(inc), "games": 1 if board != "royal" else 0,
+                                         "correct": correct, "total": total}},
+            upsert=True, return_document=True, projection={"_id": 0},
+        )
+        return int(doc.get("score", 0))
+    existing = await db.tournament_boards.find_one({"board": board, "user_id": user["user_id"]}, {"_id": 0})
+    if existing is None or int(existing.get("score", 0)) < int(best or 0):
+        await db.tournament_boards.update_one(
+            {"board": board, "user_id": user["user_id"]},
+            {"$set": {**base_set, "score": int(best or 0), "correct": correct, "total": total},
+             "$inc": {"games": 1}},
+            upsert=True,
+        )
+        return int(best or 0)
+    await db.tournament_boards.update_one(
+        {"board": board, "user_id": user["user_id"]}, {"$set": base_set, "$inc": {"games": 1}}
+    )
+    return int(existing.get("score", 0))
+
+
+async def _board_rank(board: str, user_id: str) -> Optional[int]:
+    row = await db.tournament_boards.find_one({"board": board, "user_id": user_id}, {"_id": 0, "score": 1})
+    if not row:
+        return None
+    higher = await db.tournament_boards.count_documents({"board": board, "score": {"$gt": int(row.get("score", 0))}})
+    return higher + 1
+
+
+async def award_royal(user: dict, mission: str, ref: Optional[str] = None,
+                      day_key: Optional[str] = None, force: bool = False) -> int:
+    """Grant Royal points for a mission respecting daily limits. Returns points awarded (0 if none)."""
+    cfg = ROYAL_MISSIONS.get(mission)
+    if not cfg:
+        return 0
+    if not force and not await _tournament_enabled():
+        return 0
+    dk = day_key or _day_key()
+    if ref and await db.royal_events.find_one({"user_id": user["user_id"], "mission": mission, "ref": ref}):
+        return 0
+    done = await db.royal_events.count_documents({"user_id": user["user_id"], "mission": mission, "day_key": dk})
+    if done >= cfg["daily_limit"] and not force:
+        return 0
+    pts = int(cfg["points"])
+    await db.royal_events.insert_one({
+        "event_id": f"re_{uuid.uuid4().hex[:12]}", "user_id": user["user_id"], "mission": mission,
+        "ref": ref, "day_key": dk, "points": pts, "created_at": datetime.now(timezone.utc),
+    })
+    await db.users.update_one({"user_id": user["user_id"]}, {"$inc": {"royal_points": pts}})
+    await _board_add("royal", user, inc=pts)
+    return pts
+
+
+async def _submit_tournament_score(body: "ScoreSubmit", user: dict) -> dict:
+    if not await _tournament_enabled():
+        raise HTTPException(status_code=403, detail="tournament_closed")
+    correct = max(0, int(body.correct))
+    total = max(correct, int(body.total))
+    score = max(0, int(body.score))
+    if body.mode == "t_classic":
+        total = min(total, T_CLASSIC_COUNT)
+        correct = min(correct, total)
+        score = min(score, correct * T_CLASSIC_MAX_PER_Q)
+        board = "classic"
+        board_score = await _board_add(board, user, inc=score, correct=correct, total=total)
+        royal = await award_royal(user, "play_classic")
+        new_best = False
+    else:
+        correct = min(correct, 200)
+        score = min(score, correct * T_TA_POINT)
+        board = "time_attack"
+        prev = await db.tournament_boards.find_one({"board": board, "user_id": user["user_id"]}, {"_id": 0, "score": 1})
+        board_score = await _board_add(board, user, best=score, correct=correct, total=total)
+        new_best = prev is None or score > int(prev.get("score", 0))
+        royal = await award_royal(user, "play_time_attack")
+    await db.scores.insert_one({
+        "entry_id": f"sc_{uuid.uuid4().hex[:12]}", "user_id": user["user_id"], "name": user["name"],
+        "picture": user.get("picture"), "score": score, "base_score": score, "streak_bonus": 0,
+        "mode": body.mode, "category": "tournament", "correct": correct, "total": total,
+        "week_key": _week_key(datetime.now(timezone.utc)), "created_at": datetime.now(timezone.utc),
+    })
+    return {
+        "ok": True, "score": score, "streak": int(user.get("current_streak", 0) or 0), "streak_bonus": 0,
+        "board": board, "board_score": board_score, "new_best": new_best,
+        "rank": await _board_rank(board, user["user_id"]), "royal_awarded": royal,
+    }
+
+
+class TournamentToggleIn(BaseModel):
+    enabled: bool
+
+
+class TournamentEntry(BaseModel):
+    user_id: str
+    name: str
+    picture: Optional[str] = None
+    score: int
+    games: int = 0
+    correct: int = 0
+    total: int = 0
+
+
+class VideoSubmitIn(BaseModel):
+    url: str
+    caption: Optional[str] = None
+
+
+class VideoOut(BaseModel):
+    video_id: str
+    user_id: str
+    name: str
+    picture: Optional[str] = None
+    url: str
+    caption: Optional[str] = None
+    status: Literal["pending", "approved", "rejected"]
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+
+
+class VideoReviewIn(BaseModel):
+    approve: bool
+
+
+@api_router.get("/tournament/status")
+async def tournament_status():
+    return {"enabled": await _tournament_enabled()}
+
+
+@api_router.put("/admin/tournament")
+async def tournament_toggle(body: TournamentToggleIn, user: dict = Depends(require_admin)):
+    await db.app_settings.update_one(
+        {"_key": "public"},
+        {"$set": {"_key": "public", "tournament_enabled": bool(body.enabled),
+                  "updated_at": datetime.now(timezone.utc), "updated_by": user["user_id"]}},
+        upsert=True,
+    )
+    return {"enabled": bool(body.enabled)}
+
+
+@api_router.get("/tournament/leaderboard", response_model=List[TournamentEntry])
+async def tournament_leaderboard(board: str = "classic", limit: int = 50):
+    if board not in TOURNAMENT_BOARDS:
+        raise HTTPException(status_code=422, detail="invalid_board")
+    cursor = db.tournament_boards.find({"board": board, "score": {"$gt": 0}}, {"_id": 0}).sort(
+        [("score", -1), ("updated_at", 1)]).limit(max(1, min(limit, 200)))
+    return [TournamentEntry(**{k: d.get(k) for k in TournamentEntry.model_fields if d.get(k) is not None})
+            async for d in cursor]
+
+
+def _video_out(d: dict) -> VideoOut:
+    return VideoOut(**{k: d.get(k) for k in VideoOut.model_fields})
+
+
+@api_router.get("/tournament/me")
+async def tournament_me(user: dict = Depends(get_current_user)):
+    dk = _day_key()
+    counts: dict = {}
+    async for ev in db.royal_events.find({"user_id": user["user_id"], "day_key": dk}, {"_id": 0, "mission": 1}):
+        counts[ev["mission"]] = counts.get(ev["mission"], 0) + 1
+    missions = [
+        {"key": k, **cfg, "done_today": min(counts.get(k, 0), cfg["daily_limit"])}
+        for k, cfg in ROYAL_MISSIONS.items()
+    ]
+    boards: dict = {}
+    for b in TOURNAMENT_BOARDS:
+        row = await db.tournament_boards.find_one({"board": b, "user_id": user["user_id"]}, {"_id": 0})
+        boards[b] = {
+            "score": int((row or {}).get("score", 0)),
+            "games": int((row or {}).get("games", 0)),
+            "rank": await _board_rank(b, user["user_id"]) if row else None,
+        }
+    videos = [
+        _video_out(d) async for d in db.royal_videos.find({"user_id": user["user_id"]}, {"_id": 0})
+        .sort("created_at", -1).limit(20)
+    ]
+    fresh = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "royal_points": 1})
+    return {
+        "enabled": await _tournament_enabled(),
+        "royal_points": int((fresh or {}).get("royal_points", 0) or 0),
+        "missions": missions,
+        "boards": boards,
+        "videos": videos,
+    }
+
+
+@api_router.post("/royal/videos", response_model=VideoOut)
+async def royal_video_submit(body: VideoSubmitIn, user: dict = Depends(get_current_user)):
+    if not await _tournament_enabled():
+        raise HTTPException(status_code=403, detail="tournament_closed")
+    url = (body.url or "").strip()
+    if not re.match(r"^https?://[^\s]+\.[^\s]+", url) or len(url) > 500:
+        raise HTTPException(status_code=422, detail="invalid_url")
+    dk = _day_key()
+    today = await db.royal_videos.count_documents(
+        {"user_id": user["user_id"], "day_key": dk, "status": {"$in": ["pending", "approved"]}})
+    if today >= ROYAL_MISSIONS["submit_video"]["daily_limit"]:
+        raise HTTPException(status_code=429, detail="daily_limit_reached")
+    doc = {
+        "video_id": f"rv_{uuid.uuid4().hex[:12]}", "user_id": user["user_id"], "name": user["name"],
+        "picture": user.get("picture"), "url": url, "caption": (body.caption or "").strip()[:200] or None,
+        "status": "pending", "day_key": dk, "created_at": datetime.now(timezone.utc), "reviewed_at": None,
+    }
+    await db.royal_videos.insert_one(doc)
+    return _video_out(doc)
+
+
+@api_router.get("/admin/royal/videos", response_model=List[VideoOut])
+async def royal_videos_admin(status: str = "pending", user: dict = Depends(require_admin)):
+    q = {} if status == "all" else {"status": status}
+    return [_video_out(d) async for d in db.royal_videos.find(q, {"_id": 0}).sort("created_at", -1).limit(100)]
+
+
+@api_router.post("/admin/royal/videos/{video_id}/review", response_model=VideoOut)
+async def royal_video_review(video_id: str, body: VideoReviewIn, user: dict = Depends(require_admin)):
+    v = await db.royal_videos.find_one({"video_id": video_id}, {"_id": 0})
+    if not v:
+        raise HTTPException(status_code=404, detail="not_found")
+    if v["status"] != "pending":
+        raise HTTPException(status_code=409, detail="already_reviewed")
+    status = "approved" if body.approve else "rejected"
+    now = datetime.now(timezone.utc)
+    await db.royal_videos.update_one({"video_id": video_id},
+                                     {"$set": {"status": status, "reviewed_at": now, "reviewed_by": user["user_id"]}})
+    owner = await db.users.find_one({"user_id": v["user_id"]}, {"_id": 0})
+    if owner:
+        if body.approve:
+            pts = await award_royal(owner, "submit_video", ref=video_id, day_key=v.get("day_key"), force=True)
+            msg = f"Video kamu disetujui admin! +{pts} poin Royal 👑"
+        else:
+            msg = "Video kamu belum disetujui admin. Coba kirim video lain ya."
+        try:
+            await push_notification(owner["user_id"], "royal_video", msg, from_user=user)
+        except Exception:
+            pass
+    v.update({"status": status, "reviewed_at": now})
+    return _video_out(v)
+
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -2132,6 +2521,38 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+async def _migrate_classic_cumulative():
+    """One-time: rebuild Classic leaderboard rows as the SUM of all past Classic sessions."""
+    flag = await db.app_settings.find_one({"_key": "migrations"}, {"_id": 0})
+    if flag and flag.get("classic_cumulative_v1"):
+        return
+    pipeline = [
+        {"$match": {"mode": "classic"}},
+        {"$sort": {"created_at": 1}},
+        {"$group": {
+            "_id": "$user_id", "name": {"$last": "$name"}, "picture": {"$last": "$picture"},
+            "category": {"$last": "$category"}, "score": {"$sum": "$score"},
+            "correct": {"$sum": "$correct"}, "total": {"$sum": "$total"},
+            "games": {"$sum": 1}, "created_at": {"$last": "$created_at"},
+        }},
+    ]
+    n = 0
+    async for r in db.scores.aggregate(pipeline):
+        uid = r.pop("_id")
+        await db.best_scores.update_one(
+            {"user_id": uid, "mode": "classic"},
+            {"$set": {**r, "user_id": uid, "mode": "classic"}},
+            upsert=True,
+        )
+        n += 1
+    await db.app_settings.update_one(
+        {"_key": "migrations"},
+        {"$set": {"_key": "migrations", "classic_cumulative_v1": True, "at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    logger.info("classic cumulative migration: %d users", n)
 
 
 @app.on_event("startup")
@@ -2172,8 +2593,20 @@ async def startup_indexes():
         await db.news_comments.create_index("comment_id", unique=True)
         await db.quiz_items.create_index("item_id", unique=True)
         await db.quiz_items.create_index([("category", 1), ("active", 1), ("order_index", 1)])
+        await db.game_sessions.create_index("game_id", unique=True)
+        await db.game_sessions.create_index("started_at", expireAfterSeconds=86400)
+        await db.tournament_boards.create_index([("board", 1), ("user_id", 1)], unique=True)
+        await db.tournament_boards.create_index([("board", 1), ("score", -1)])
+        await db.royal_events.create_index([("user_id", 1), ("mission", 1), ("day_key", 1)])
+        await db.royal_videos.create_index("video_id", unique=True)
+        await db.royal_videos.create_index([("status", 1), ("created_at", -1)])
     except Exception as e:
         logger.warning("index creation issue: %s", e)
+
+    try:
+        await _migrate_classic_cumulative()
+    except Exception as e:
+        logger.warning("classic cumulative migration issue: %s", e)
 
     try:
         await run_in_threadpool(init_storage)
