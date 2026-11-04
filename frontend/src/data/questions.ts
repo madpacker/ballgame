@@ -152,9 +152,16 @@ export async function pickDynamicQuestions(
     // Weekly themed challenges still filter Madura United player photos.
     const players = await fetchDynamicPlayers();
     pool = playersToQuestions(filterPlayersByTheme(players, theme));
+  } else if (cat === "tournament") {
+    // Tournament mixes only the categories the admin switched on.
+    let cats: string[] | null = null;
+    try {
+      cats = (await api<{ categories: string[] }>("/tournament/status")).categories;
+    } catch {}
+    const items = await fetchQuizItems("all");
+    pool = quizItemsToQuestions(cats ? items.filter((i) => cats!.includes(i.category)) : items);
   } else {
-    // "all" and "tournament" mix every admin category; otherwise just the chosen one.
-    const key = cat === "all" || cat === "tournament" ? "all" : cat;
+    const key = cat === "all" ? "all" : cat;
     pool = quizItemsToQuestions(await fetchQuizItems(key));
   }
   return shuffle(pool).slice(0, Math.min(count, pool.length));

@@ -1,0 +1,44 @@
+{
+  "summary": "Iter20 tested Football 100 (admin CRUD, CSV import, start/submit scoring, cumulative leaderboard, XP), admin Futcard gifting, tournament reset, and tournament category toggles. Backend: the new suite test_iter20_f100_gift_tournament.py passes 13/13. Full regression (-n 0) passes 340/340 after I fixed 6 stale assertions in test_iter14 (the status/toggle response now also returns 'categories'). Frontend at 390x844 (plus 360 for home): admin added an F100 question through the UI, CSV import worked (1 created, 1 skipped with a row error), edit and delete worked, and the duplicate-option validation message showed. As a user I played 3 full /f100 games. Tapping options filled the slots in order, tapping a slot removed that pick, 4 picks auto-advanced, and the 30s timeout locked a single pick for +10. The scores were correct (perfect=100, 4 correct in wrong order=40, 1 pick=10, all wrong=0, session 150). The leaderboard added up correctly (350 points, 3x main, 00:00:46, 14.2%) and /me/xp = 350. The tcat chips save and survive a reload. The tournament-reset confirm dialog appears and the note shows. The gift panel flow works: search, KIRIM, success message and the 'sudah punya kartu ini' duplicate message. The gifted card shows in profile KOLEKSI KARTU. The home Football 100 card does not break the layout at 360 or 390. Found 1 real frontend race bug in the tcat chips and 2 business-logic concerns (XP farming and XP loss on reset). Deprecated packages detected: none (no expo-av/expo-barcode-scanner/expo-background-fetch).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/tournament/reset", "issue": "_user_xp (server.py:1049-1063) adds tournament_boards classic/time_attack scores to XP. Reset deletes tournament_boards, so every participant's XP and level DROP. If they already spent XP in the Store, balance = max(0, xp - spent) can fall to 0. Users silently lose earned/spendable XP."},
+      {"endpoint": "POST /api/f100/submit", "issue": "Possible XP/Store farming: F100 is unlimited replays at up to 1000 pts/game, and the score adds to the F100 cumulative board and to spendable XP (_user_xp). With a small question pool, the same 10 questions repeat and are easy to memorise. There is no daily cap (Classic tournament has caps)."},
+      {"endpoint": "POST /api/f100/submit", "issue": "time_ms is trusted from the client (only bounded per answer at 0..32000). The server never compares it with the session's started_at, so a client can submit time_ms=0 to win time tie-breaks or inflate accuracy rank order."},
+      {"endpoint": "POST /api/admin/tournament/reset", "issue": "royal_events are not cleared. Same-day mission daily_limit counters and ref-dedup (e.g. a video already rewarded) still apply after a reset, so users may not be able to re-earn Royal points the same day for the new event."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TournamentAdmin category chips", "issue": "Race condition: chips render and can be tapped before GET /tournament/status resolves (cats state starts as []). Tapping a chip during load computes next=[k] and PUTs categories=[k], silently wiping the other 6 categories. Reproduced twice: tapping tcat-liga right after it appeared saved categories=['liga']. Fix: keep a 'loaded' flag and disable the chips (or show a spinner) until status loads. Reference: /app/frontend/src/components/TournamentAdmin.tsx:24,52-66", "testID": "tcat-*", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/f100 result", "issues": ["The WAKTU stat ('0m 37d') wraps onto 2 lines in its narrow stat box at 390px.", "Formats don't match: the result uses 'Xm Yd' while the leaderboard uses hh:mm:ss, and the result rounds accuracy (23%) while the leaderboard shows one decimal (22.5%)."]},
+      {"screen": "Home (web)", "issues": ["The absolute background image is wider than the screen (scrollWidth 1080 vs viewport 360/390), so on web the page can scroll sideways 500px and show only the background. Likely pre-existing and web-only."]},
+      {"screen": "Admin F100 list", "issues": ["f100-delete-{id} deletes with no confirmation."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter20_f100_gift_tournament.py", "/app/backend/tests/seed_iter20_fe.py", "/app/test_reports/pytest/pytest_iter20.xml"],
+  "action_items": [
+    "TournamentAdmin: disable the tcat chips until /tournament/status has loaded, so an early tap can't overwrite the categories with a single one.",
+    "Decide on the XP policy for tournament reset: either snapshot tournament XP into a users.xp_bonus field before deleting boards, or exclude tournament_boards from _user_xp, so reset doesn't take away earned or spent XP.",
+    "Consider a daily cap or diminishing XP for Football 100 to prevent farming Store currency by replaying.",
+    "Optional: check F100 time_ms on the server against the session start time; clear royal_events on tournament reset; add a confirm before deleting an F100 question; make time and accuracy formats match between the result screen and the leaderboard."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 3231 lines. It should be split into routers (f100, store, tournament, etc.).",
+    "_f100_score dedups picks with a set, so duplicate picks can't inflate hits. Good.",
+    "gift-card relies on the unique user_cards(user_id, card_id) index plus a pre-check. A concurrent duplicate request would raise DuplicateKeyError and return 500 instead of 409 (minor).",
+    "F100 start uses $sample with no exclusion of recently seen items, so the same questions repeat often when the pool is small."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter14_tournament.py (updated stale assertions: status/toggle responses now include categories)", "/app/backend/tests/test_iter20_f100_gift_tournament.py (new)", "/app/backend/tests/seed_iter20_fe.py (new)"],
+  "success_rate": {"backend": "100% (13/13 new, 340/340 full regression after fixing the stale iter14 assertions)", "frontend": "~95% (all requested flows pass; 1 race bug in the tcat chips)"},
+  "seed_data_creation": "Created TEST_it20*/TEST_it20fe* users and sessions, 10 TEST F100 items via the API and 1 via the UI, a CSV-imported item, 1 TEST_fe_card store card and the gifted user_card. All were deleted by id or their own user_ids afterwards. The tournament reset was run on the preview DB while tournament_boards was empty (0 rows cleared). Final state: tournament_enabled=false, all 7 tournament_categories on, f100_items=0, f100_board=0, no TEST users left. NOTE: the real admin tosjoki@gmail.com now has name 'Cak Mad' and a new avatar (avatar_changed_at 17:24 UTC), set via that user's own OAuth session created 17:22 UTC. My tests did not do this (they only used TEST_ tokens). Flagging so E1 can confirm it was the owner.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use python /app/backend/tests/seed_iter20_fe.py seed|clean for FE data (admin token TEST_tok_it20fe_admin, user token TEST_tok_it20fe_user, localStorage key 'cakmad.session_token'). On the profile page, wait about 4s before checking card-collection (cards load after auth). The frontend env key is EXPO_PUBLIC_BACKEND_URL.",
+  "rca_of_issue": "tcat chip race: TournamentAdmin starts with cats=[] and renders all chips as unselected-but-tappable. toggleCat computes next=[...cats,k]=[k] and PUTs it, and the backend accepts it (valid and at least one category), so the other categories are lost."
+}

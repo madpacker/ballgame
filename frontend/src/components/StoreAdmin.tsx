@@ -21,6 +21,28 @@ export default function StoreAdmin() {
   const [img, setImg] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null);
+  const [giftId, setGiftId] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [found, setFound] = useState<{ user_id: string; name: string; username?: string; email?: string }[]>([]);
+
+  const search = async (text: string) => {
+    setQ(text);
+    if (text.trim().length < 2) return setFound([]);
+    api<typeof found>(`/admin/users/search?q=${encodeURIComponent(text.trim())}`).then(setFound).catch(() => setFound([]));
+  };
+
+  const gift = async (uid: string, name: string) => {
+    if (!giftId) return;
+    try {
+      await api(`/admin/users/${uid}/gift-card`, { method: "POST", body: JSON.stringify({ card_id: giftId }) });
+      setMsg({ ok: true, t: `Kartu dikirim ke ${name} 🎁` });
+      setGiftId(null);
+      setQ("");
+      setFound([]);
+    } catch (e) {
+      setMsg({ ok: false, t: String(e).includes("already_owned") ? `${name} sudah punya kartu ini.` : "Gagal mengirim kartu." });
+    }
+  };
 
   const load = useCallback(() => {
     api<Card[]>("/admin/store/cards").then(setCards).catch(() => setCards([]));
@@ -108,6 +130,22 @@ export default function StoreAdmin() {
           </Pressable>
         )}
       </View>
+      {giftId && (
+        <View testID="gift-panel" style={styles.giftPanel}>
+          <Text style={styles.itemTitle}>Hadiahkan “{cards.find((c) => c.card_id === giftId)?.title}” ke user:</Text>
+          <TextInput testID="gift-search" value={q} onChangeText={search} placeholder="Cari nama / username / email" placeholderTextColor={colors.muted} style={styles.input} autoCapitalize="none" />
+          {found.map((u) => (
+            <Pressable key={u.user_id} testID={`gift-user-${u.user_id}`} onPress={() => gift(u.user_id, u.name)} style={styles.item}>
+              <Ionicons name="person-circle" size={26} color={colors.muted} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.itemTitle}>{u.name}</Text>
+                <Text style={styles.sub}>@{u.username} · {u.email}</Text>
+              </View>
+              <Text style={{ color: colors.brandPrimary, fontWeight: "900" }}>KIRIM</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
       {cards.map((c) => (
         <View key={c.card_id} testID={`admin-card-${c.card_id}`} style={styles.item}>
           {c.image_url ? <Image source={absoluteFileUrl(c.image_url)} style={styles.thumb} /> : <View style={styles.thumb} />}
@@ -115,6 +153,9 @@ export default function StoreAdmin() {
             <Text style={styles.itemTitle}>{c.title}</Text>
             <Text style={styles.sub}>{c.price.toLocaleString("id-ID")} poin · stok {c.stock}</Text>
           </View>
+          <Pressable testID={`admin-card-gift-${c.card_id}`} onPress={() => setGiftId(giftId === c.card_id ? null : c.card_id)} hitSlop={8} style={styles.iconBtn}>
+            <Ionicons name="gift" size={20} color={colors.brandPrimary} />
+          </Pressable>
           <Pressable testID={`admin-card-edit-${c.card_id}`} onPress={() => edit(c)} hitSlop={8} style={styles.iconBtn}>
             <Ionicons name="create" size={20} color={colors.brandSecondary} />
           </Pressable>
@@ -143,4 +184,5 @@ const styles = StyleSheet.create({
   thumb: { width: 40, height: 50, borderRadius: radius.sm, backgroundColor: colors.surfaceTertiary },
   itemTitle: { color: colors.onSurface, fontWeight: "800" },
   iconBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
+  giftPanel: { gap: spacing.sm, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.brandPrimary },
 });

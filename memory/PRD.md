@@ -48,3 +48,6 @@
 - Home redesigned as game lobby (profile bar + level/XP from /api/me/xp, 500 XP per level, bento grid, BottomNav: Leaderboard/Prediksi/Berita/Store/Profil + MULAI). Art slots in src/data/homeArt.ts (awaiting owner images). /store = coming soon (awaiting owner design).
 - Pengaturan Profil (/settings): name edit + avatar upload (once/7 days), custom name/photo kept across Google logins.
 - Game Store (/store): admin Futcards (photo, price, stock) redeemed with XP balance (xp - xp_spent; level unaffected), one per user; owned cards in Profile "KOLEKSI KARTU". Profile redesigned (stadium/glass).
+
+- Tournament: admin category toggles (tournament_categories) + RESET all boards (archived to tournament_archives, royal_points=0). Admin gifts Futcards to users (/api/admin/users/{id}/gift-card) -> profile collection.
+- Football 100 (/f100): 10 Qs, 30s each, 4 ordered slots + 8 options; perfect order=100, else 10/hit; server-scored via /api/f100/start|submit; cumulative leaderboard /f100/leaderboard (attempts, time, accuracy); admin CRUD + CSV (prompt, answer_1..4, wrong_1..4). Counts toward XP.

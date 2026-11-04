@@ -1058,6 +1058,11 @@ async def _user_xp(uid: str) -> int:
         {"$group": {"_id": None, "s": {"$sum": "$points"}}},
     ]):
         xp += int(r.get("s", 0) or 0)
+    f = await db.f100_board.find_one({"user_id": uid}, {"_id": 0, "score": 1})
+    xp += int((f or {}).get("score", 0) or 0)
+    # Tournament points banked at each event reset so XP/level never drops.
+    u = await db.users.find_one({"user_id": uid}, {"_id": 0, "xp_banked": 1})
+    xp += int((u or {}).get("xp_banked", 0) or 0)
     return xp
 
 
@@ -1284,6 +1289,242 @@ async def store_card_redeem(card_id: str, user: dict = Depends(get_current_user)
 async def my_cards(user: dict = Depends(get_current_user)):
     cur = db.user_cards.find({"user_id": user["user_id"]}, {"_id": 0, "user_id": 0}).sort("redeemed_at", 1)
     return [d async for d in cur]
+
+
+# ---------- Admin: gift Futcards to users (tournament prizes) ----------
+class GiftCardIn(BaseModel):
+    card_id: str
+
+
+@api_router.get("/admin/users/search")
+async def admin_user_search(q: str = "", user: dict = Depends(require_admin)):
+    q = q.strip()
+    if len(q) < 2:
+        return []
+    rx = {"$regex": re.escape(q), "$options": "i"}
+    cur = db.users.find({"$or": [{"name": rx}, {"username": rx}, {"email": rx}]},
+                        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "email": 1, "picture": 1}).limit(20)
+    return [u async for u in cur]
+
+
+@api_router.post("/admin/users/{user_id}/gift-card")
+async def admin_gift_card(user_id: str, body: GiftCardIn, user: dict = Depends(require_admin)):
+    target = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    card = await db.store_cards.find_one({"card_id": body.card_id, "deleted_at": {"$exists": False}}, {"_id": 0})
+    if not card:
+        raise HTTPException(status_code=404, detail="card_not_found")
+    if await db.user_cards.find_one({"user_id": user_id, "card_id": body.card_id}):
+        raise HTTPException(status_code=409, detail="already_owned")
+    await db.user_cards.insert_one({
+        "user_id": user_id, "card_id": body.card_id, "title": card["title"], "image_url": card.get("image_url"),
+        "price": 0, "gifted": True, "gifted_by": user["user_id"], "redeemed_at": datetime.now(timezone.utc),
+    })
+    try:
+        await push_notification(user_id, "gift_card", f"Selamat! Kamu mendapat kartu {card['title']} dari admin 🎁", from_user=user)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+# ---------- Football 100 (order the 4 correct answers) ----------
+F100_QUESTIONS = 10
+F100_SECONDS = 30
+F100_PERFECT = 100
+F100_PER_HIT = 10
+
+
+class F100ItemIn(BaseModel):
+    prompt: str = Field(min_length=3, max_length=300)
+    answers: List[str] = Field(min_length=4, max_length=4)  # correct order
+    wrong: List[str] = Field(min_length=4, max_length=4)  # 4 distractors
+    active: bool = True
+
+
+class F100ItemOut(BaseModel):
+    item_id: str
+    prompt: str
+    answers: List[str]
+    wrong: List[str]
+    active: bool
+    order_index: int
+
+
+def _f100_out(d: dict) -> F100ItemOut:
+    return F100ItemOut(**{k: d.get(k) for k in F100ItemOut.model_fields})
+
+
+def _f100_validate(answers: List[str], wrong: List[str]):
+    a = [x.strip() for x in answers]
+    w = [x.strip() for x in wrong]
+    if any(not x for x in a + w) or len({x.lower() for x in a + w}) != 8:
+        raise HTTPException(status_code=422, detail="need_8_unique_options")
+    return a, w
+
+
+@api_router.get("/admin/f100/items", response_model=List[F100ItemOut])
+async def f100_admin_list(user: dict = Depends(require_admin)):
+    cur = db.f100_items.find({"deleted_at": {"$exists": False}}, {"_id": 0}).sort("order_index", 1)
+    return [_f100_out(d) async for d in cur]
+
+
+@api_router.post("/admin/f100/items", response_model=F100ItemOut)
+async def f100_create(body: F100ItemIn, user: dict = Depends(require_admin)):
+    a, w = _f100_validate(body.answers, body.wrong)
+    last = await db.f100_items.find_one({"deleted_at": {"$exists": False}}, sort=[("order_index", -1)])
+    doc = {"item_id": f"f1_{uuid.uuid4().hex[:12]}", "prompt": body.prompt.strip(), "answers": a, "wrong": w,
+           "active": body.active, "order_index": (last["order_index"] + 1) if last else 0,
+           "created_at": datetime.now(timezone.utc)}
+    await db.f100_items.insert_one(doc)
+    return _f100_out(doc)
+
+
+@api_router.put("/admin/f100/items/{item_id}", response_model=F100ItemOut)
+async def f100_update(item_id: str, body: F100ItemIn, user: dict = Depends(require_admin)):
+    a, w = _f100_validate(body.answers, body.wrong)
+    doc = await db.f100_items.find_one_and_update(
+        {"item_id": item_id, "deleted_at": {"$exists": False}},
+        {"$set": {"prompt": body.prompt.strip(), "answers": a, "wrong": w, "active": body.active,
+                  "updated_at": datetime.now(timezone.utc)}},
+        return_document=True, projection={"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    return _f100_out(doc)
+
+
+@api_router.delete("/admin/f100/items/{item_id}")
+async def f100_delete(item_id: str, user: dict = Depends(require_admin)):
+    r = await db.f100_items.update_one({"item_id": item_id}, {"$set": {"deleted_at": datetime.now(timezone.utc)}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="not_found")
+    return {"ok": True}
+
+
+@api_router.post("/admin/f100/import")
+async def f100_import(file: UploadFile = File(...), user: dict = Depends(require_admin)):
+    """CSV columns: prompt, answer_1..answer_4 (correct order), wrong_1..wrong_4, [active]."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty_file")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    try:
+        delimiter = csv.Sniffer().sniff(text.splitlines()[0], delimiters=",;\t").delimiter
+    except Exception:
+        delimiter = ","
+    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+    cols = ["prompt"] + [f"answer_{i}" for i in range(1, 5)] + [f"wrong_{i}" for i in range(1, 5)]
+    if not reader.fieldnames or not set(cols).issubset({c.strip().lower() for c in reader.fieldnames}):
+        raise HTTPException(status_code=422, detail=f"missing_columns:{','.join(cols)}")
+    last = await db.f100_items.find_one({"deleted_at": {"$exists": False}}, sort=[("order_index", -1)])
+    order = (last["order_index"] + 1) if last else 0
+    created, errors = 0, []
+    for i, row in enumerate(reader, start=2):
+        n = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items() if k}
+        a = [n.get(f"answer_{j}", "") for j in range(1, 5)]
+        w = [n.get(f"wrong_{j}", "") for j in range(1, 5)]
+        if not n.get("prompt") or any(not x for x in a + w) or len({x.lower() for x in a + w}) != 8:
+            errors.append(f"Baris {i}: butuh prompt + 8 jawaban unik.")
+            continue
+        await db.f100_items.insert_one({
+            "item_id": f"f1_{uuid.uuid4().hex[:12]}", "prompt": n["prompt"][:300], "answers": a, "wrong": w,
+            "active": n.get("active", "true").lower() not in ("false", "0", "no", "tidak"),
+            "order_index": order, "created_at": datetime.now(timezone.utc),
+        })
+        order += 1
+        created += 1
+    return {"created": created, "skipped": len(errors), "errors": errors[:20]}
+
+
+@api_router.post("/f100/start")
+async def f100_start(user: dict = Depends(get_current_user)):
+    items = await db.f100_items.aggregate([
+        {"$match": {"active": True, "deleted_at": {"$exists": False}}},
+        {"$sample": {"size": F100_QUESTIONS}},
+        {"$project": {"_id": 0}},
+    ]).to_list(F100_QUESTIONS)
+    if not items:
+        raise HTTPException(status_code=404, detail="no_questions")
+    game_id = f"f1g_{uuid.uuid4().hex}"
+    await db.f100_sessions.insert_one({"game_id": game_id, "user_id": user["user_id"],
+                                       "item_ids": [i["item_id"] for i in items], "used": False,
+                                       "started_at": datetime.now(timezone.utc)})
+    out = []
+    for it in items:
+        opts = it["answers"] + it["wrong"]
+        random.shuffle(opts)
+        out.append({"item_id": it["item_id"], "prompt": it["prompt"], "options": opts})
+    return {"game_id": game_id, "seconds": F100_SECONDS, "questions": out}
+
+
+class F100Answer(BaseModel):
+    item_id: str
+    picks: List[str] = Field(max_length=4)
+    time_ms: int = Field(ge=0, le=F100_SECONDS * 1000 + 2000)
+
+
+class F100SubmitIn(BaseModel):
+    game_id: str
+    answers: List[F100Answer] = Field(max_length=F100_QUESTIONS)
+
+
+def _f100_score(key: List[str], picks: List[str]) -> tuple:
+    norm = [p.strip().lower() for p in picks]
+    k = [x.strip().lower() for x in key]
+    if norm == k:
+        return F100_PERFECT, 4
+    hits = len({p for p in norm if p in k})
+    return hits * F100_PER_HIT, hits
+
+
+@api_router.post("/f100/submit")
+async def f100_submit(body: F100SubmitIn, user: dict = Depends(get_current_user)):
+    sess = await db.f100_sessions.find_one_and_update(
+        {"game_id": body.game_id, "user_id": user["user_id"], "used": False}, {"$set": {"used": True}})
+    if not sess:
+        raise HTTPException(status_code=409, detail="invalid_or_used_game")
+    keys = {d["item_id"]: d["answers"] async for d in db.f100_items.find(
+        {"item_id": {"$in": sess["item_ids"]}}, {"_id": 0, "item_id": 1, "answers": 1})}
+    total, hits, perfect, time_ms, results, seen = 0, 0, 0, 0, [], set()
+    for a in body.answers:
+        if a.item_id not in keys or a.item_id in seen:
+            continue
+        seen.add(a.item_id)
+        pts, h = _f100_score(keys[a.item_id], a.picks)
+        total += pts
+        hits += h
+        perfect += 1 if pts == F100_PERFECT else 0
+        time_ms += min(a.time_ms, F100_SECONDS * 1000)
+        results.append({"item_id": a.item_id, "points": pts, "hits": h, "key": keys[a.item_id]})
+    # Never report more time than really passed since the game started.
+    started = _aware(sess["started_at"])
+    time_ms = min(time_ms, int((datetime.now(timezone.utc) - started).total_seconds() * 1000))
+    slots = len(sess["item_ids"]) * 4
+    now = datetime.now(timezone.utc)
+    row = await db.f100_board.find_one_and_update(
+        {"user_id": user["user_id"]},
+        {"$set": {"user_id": user["user_id"], "name": user["name"], "picture": user.get("picture"), "updated_at": now},
+         "$inc": {"score": total, "attempts": 1, "time_ms": time_ms, "hits": hits, "slots": slots, "perfect": perfect}},
+        upsert=True, return_document=True, projection={"_id": 0})
+    higher = await db.f100_board.count_documents({"score": {"$gt": row["score"]}})
+    return {"ok": True, "score": total, "hits": hits, "slots": slots, "perfect": perfect, "time_ms": time_ms,
+            "total_score": row["score"], "rank": higher + 1, "results": results}
+
+
+@api_router.get("/f100/leaderboard")
+async def f100_leaderboard(limit: int = 100):
+    cur = db.f100_board.find({"attempts": {"$gt": 0}}, {"_id": 0}).sort([("score", -1), ("time_ms", 1)]).limit(max(1, min(limit, 200)))
+    out = []
+    async for d in cur:
+        slots = int(d.get("slots", 0) or 0)
+        out.append({"user_id": d["user_id"], "name": d.get("name"), "picture": d.get("picture"),
+                    "score": int(d.get("score", 0)), "attempts": int(d.get("attempts", 0)),
+                    "time_ms": int(d.get("time_ms", 0)), "perfect": int(d.get("perfect", 0)),
+                    "accuracy": round(100 * int(d.get("hits", 0)) / slots, 1) if slots else 0.0})
+    return out
 
 
 @api_router.get("/top-streaks", response_model=List[StreakLeader])
@@ -2659,7 +2900,8 @@ async def _submit_tournament_score(body: "ScoreSubmit", user: dict) -> dict:
 
 
 class TournamentToggleIn(BaseModel):
-    enabled: bool
+    enabled: Optional[bool] = None
+    categories: Optional[List[str]] = None  # quiz categories mixed into Tournament questions
 
 
 class TournamentEntry(BaseModel):
@@ -2693,20 +2935,45 @@ class VideoReviewIn(BaseModel):
     approve: bool
 
 
+async def _tournament_categories() -> List[str]:
+    doc = await _load_app_settings()
+    cats = doc.get("tournament_categories")
+    return [c for c in cats if c in ALLOWED_QUIZ_CATEGORIES] if isinstance(cats, list) else sorted(ALLOWED_QUIZ_CATEGORIES)
+
+
 @api_router.get("/tournament/status")
 async def tournament_status():
-    return {"enabled": await _tournament_enabled()}
+    return {"enabled": await _tournament_enabled(), "categories": await _tournament_categories()}
+
+
+@api_router.post("/admin/tournament/reset")
+async def tournament_reset(user: dict = Depends(require_admin)):
+    """One-off event: archive then wipe every Tournament board (Classic, Time Attack, Royal)."""
+    now = datetime.now(timezone.utc)
+    rows = await db.tournament_boards.find({}, {"_id": 0}).to_list(100000)
+    if rows:
+        await db.tournament_archives.insert_one({"archive_id": f"ta_{uuid.uuid4().hex[:10]}", "reset_at": now,
+                                                 "reset_by": user["user_id"], "rows": rows})
+    for r in rows:
+        if r.get("board") in ("classic", "time_attack") and int(r.get("score", 0) or 0) > 0:
+            await db.users.update_one({"user_id": r["user_id"]}, {"$inc": {"xp_banked": int(r["score"])}})
+    await db.tournament_boards.delete_many({})
+    await db.users.update_many({"royal_points": {"$gt": 0}}, {"$set": {"royal_points": 0}})
+    return {"ok": True, "cleared": len(rows)}
 
 
 @api_router.put("/admin/tournament")
 async def tournament_toggle(body: TournamentToggleIn, user: dict = Depends(require_admin)):
-    await db.app_settings.update_one(
-        {"_key": "public"},
-        {"$set": {"_key": "public", "tournament_enabled": bool(body.enabled),
-                  "updated_at": datetime.now(timezone.utc), "updated_by": user["user_id"]}},
-        upsert=True,
-    )
-    return {"enabled": bool(body.enabled)}
+    upd: dict = {"_key": "public", "updated_at": datetime.now(timezone.utc), "updated_by": user["user_id"]}
+    if body.enabled is not None:
+        upd["tournament_enabled"] = bool(body.enabled)
+    if body.categories is not None:
+        cats = [c for c in body.categories if c in ALLOWED_QUIZ_CATEGORIES]
+        if not cats:
+            raise HTTPException(status_code=422, detail="need_one_category")
+        upd["tournament_categories"] = cats
+    await db.app_settings.update_one({"_key": "public"}, {"$set": upd}, upsert=True)
+    return {"enabled": await _tournament_enabled(), "categories": await _tournament_categories()}
 
 
 @api_router.get("/tournament/leaderboard", response_model=List[TournamentEntry])
@@ -2938,6 +3205,11 @@ async def startup_indexes():
         await db.game_sessions.create_index("game_id", unique=True)
         await db.user_cards.create_index([("user_id", 1), ("card_id", 1)], unique=True)
         await db.store_cards.create_index("card_id", unique=True)
+        await db.f100_items.create_index("item_id", unique=True)
+        await db.f100_sessions.create_index("game_id", unique=True)
+        await db.f100_sessions.create_index("started_at", expireAfterSeconds=86400)
+        await db.f100_board.create_index("user_id", unique=True)
+        await db.f100_board.create_index([("score", -1)])
         await db.game_sessions.create_index("started_at", expireAfterSeconds=86400)
         await db.tournament_boards.create_index([("board", 1), ("user_id", 1)], unique=True)
         await db.tournament_boards.create_index([("board", 1), ("score", -1)])

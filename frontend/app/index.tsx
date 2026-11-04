@@ -244,6 +244,29 @@ export default function Home() {
               </Text>
             </Pressable>
 
+            <Pressable
+              testID="mode-f100-button"
+              onPress={() => {
+                tap();
+                router.push("/f100");
+              }}
+              style={({ pressed }) => [styles.card, styles.f100Card, pressed && styles.pressed]}
+            >
+              <LinearGradient colors={["#0F5A3A", "#0A3A2A", "#082418"]} style={StyleSheet.absoluteFill} />
+              <Text numberOfLines={1} style={[styles.cardTitle, { fontSize: 17 }]}>
+                FOOTBALL <Text style={{ color: L.gold }}>100</Text>
+              </Text>
+              <Text style={styles.cardSub}>Susun 4 jawaban benar sesuai urutan. Sempurna = 100 poin!</Text>
+              <View style={styles.f100Slots}>
+                {[1, 2, 3, 4].map((n) => (
+                  <View key={n} style={styles.f100Slot}>
+                    <Text style={styles.f100SlotTxt}>{n}</Text>
+                  </View>
+                ))}
+                <Ionicons name="play-forward" size={20} color={L.xp} style={{ marginLeft: "auto" }} />
+              </View>
+            </Pressable>
+
             <View testID="about-card" style={[styles.card, styles.aboutCard]}>
               <Text style={styles.aboutTitle}>Tentang Game</Text>
               <Text style={styles.aboutBody}>
@@ -519,6 +542,10 @@ const styles = StyleSheet.create({
   classicSubTitle: { color: L.white, fontSize: 13, fontWeight: "900", fontStyle: "italic" },
   classicInfo: { color: L.silver, fontSize: 11, lineHeight: 15, marginTop: 2 },
   fire: { position: "absolute", left: 0, right: 0, bottom: 0, height: "45%" },
+  f100Card: { borderColor: L.xp, ...glow(L.xp) },
+  f100Slots: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: spacing.sm },
+  f100Slot: { width: 24, height: 24, borderRadius: 6, borderWidth: 1.5, borderColor: L.gold, alignItems: "center", justifyContent: "center" },
+  f100SlotTxt: { color: L.gold, fontSize: 11, fontWeight: "900" },
   streakCard: { borderColor: L.orange, minHeight: 150, ...glow(L.orange) },
   streakRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.sm },
   avatars: { flexDirection: "row", alignItems: "center" },

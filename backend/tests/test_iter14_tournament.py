@@ -75,7 +75,7 @@ def H(tok):
 def toggle(c, enabled):
     r = requests.put(f"{c['base']}/api/admin/tournament", json={"enabled": enabled}, headers=H(c["atok"]))
     assert r.status_code == 200, r.text
-    assert r.json() == {"enabled": enabled}
+    assert r.json()["enabled"] == enabled
 
 
 def score(c, tok, mode, sc, correct, total):
@@ -95,10 +95,10 @@ class TestToggle:
     def test_toggle_reflects_in_status_and_settings(self, ctx):
         b = ctx["base"]
         toggle(ctx, False)
-        assert requests.get(f"{b}/api/tournament/status").json() == {"enabled": False}
+        assert requests.get(f"{b}/api/tournament/status").json()["enabled"] is False
         assert requests.get(f"{b}/api/app-settings").json().get("tournament_enabled") is False
         toggle(ctx, True)
-        assert requests.get(f"{b}/api/tournament/status").json() == {"enabled": True}
+        assert requests.get(f"{b}/api/tournament/status").json()["enabled"] is True
         assert requests.get(f"{b}/api/app-settings").json().get("tournament_enabled") is True
 
 

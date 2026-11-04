@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { colors, radius, spacing } from "@/src/theme";
 import { api } from "@/src/api";
+import { CATEGORY_LABEL, QUIZ_CATEGORY_KEYS, type Category } from "@/src/data/quiz";
+import { Alert, Platform } from "react-native";
 
 type Video = {
   video_id: string;
@@ -19,14 +21,19 @@ export default function TournamentAdmin() {
   const [saving, setSaving] = useState(false);
   const [videos, setVideos] = useState<Video[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [cats, setCats] = useState<string[]>([]);
+  const [note, setNote] = useState<string | null>(null);
 
   const loadVideos = useCallback(() => {
     api<Video[]>("/admin/royal/videos?status=pending").then(setVideos).catch(() => setVideos([]));
   }, []);
 
   useEffect(() => {
-    api<{ enabled: boolean }>("/tournament/status")
-      .then((r) => setEnabled(r.enabled))
+    api<{ enabled: boolean; categories: string[] }>("/tournament/status")
+      .then((r) => {
+        setEnabled(r.enabled);
+        setCats(r.categories);
+      })
       .catch(() => setEnabled(false));
     loadVideos();
   }, [loadVideos]);
@@ -41,6 +48,43 @@ export default function TournamentAdmin() {
       setEnabled(r.enabled);
     } catch {}
     setSaving(false);
+  };
+
+  const toggleCat = async (k: Category) => {
+    const next = cats.includes(k) ? cats.filter((c) => c !== k) : [...cats, k];
+    if (next.length === 0) return setNote("Minimal 1 kategori harus aktif.");
+    setNote(null);
+    setCats(next);
+    try {
+      const r = await api<{ categories: string[] }>("/admin/tournament", {
+        method: "PUT",
+        body: JSON.stringify({ categories: next }),
+      });
+      setCats(r.categories);
+    } catch {
+      setNote("Gagal menyimpan kategori.");
+    }
+  };
+
+  const doReset = async () => {
+    try {
+      const r = await api<{ cleared: number }>("/admin/tournament/reset", { method: "POST" });
+      setNote(`Peringkat Tournament direset (${r.cleared} baris diarsipkan).`);
+    } catch {
+      setNote("Gagal reset peringkat.");
+    }
+  };
+
+  const confirmReset = () => {
+    const msg = "Semua poin Classic, Time Attack & Royal Tournament akan dikosongkan untuk event baru. Lanjutkan?";
+    if (Platform.OS === "web") {
+      if (window.confirm(msg)) doReset();
+    } else {
+      Alert.alert("Reset Peringkat Tournament", msg, [
+        { text: "Batal", style: "cancel" },
+        { text: "Reset", style: "destructive", onPress: doReset },
+      ]);
+    }
   };
 
   const review = async (id: string, approve: boolean) => {
@@ -74,6 +118,40 @@ export default function TournamentAdmin() {
           />
         )}
       </View>
+
+      <View style={styles.divider} />
+      <Text style={styles.title}>Kategori soal Tournament</Text>
+      <Text style={styles.sub}>Hanya kategori yang aktif yang masuk ke soal Classic & Time Attack Tournament.</Text>
+      <View style={styles.chips}>
+        {QUIZ_CATEGORY_KEYS.map((k) => {
+          const on = cats.includes(k);
+          return (
+            <Pressable
+              key={k}
+              testID={`tcat-${k}`}
+              disabled={enabled === null}
+              onPress={() => toggleCat(k)}
+              style={[styles.chip, on && { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary }]}
+            >
+              <Ionicons name={on ? "checkmark-circle" : "ellipse-outline"} size={14} color={on ? colors.onBrandPrimary : colors.muted} />
+              <Text style={[styles.chipTxt, on && { color: colors.onBrandPrimary }]}>{CATEGORY_LABEL[k]}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <View style={styles.divider} />
+      <View style={styles.headRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Reset poin peringkat</Text>
+          <Text style={styles.sub}>Tournament = event 1 kali. Kosongkan semua papan sebelum event baru (data lama diarsipkan).</Text>
+        </View>
+        <Pressable testID="tournament-reset" onPress={confirmReset} style={styles.resetBtn}>
+          <Ionicons name="refresh-circle" size={18} color={colors.onError} />
+          <Text style={styles.resetTxt}>RESET</Text>
+        </Pressable>
+      </View>
+      {note && <Text testID="tournament-note" style={styles.sub}>{note}</Text>}
 
       <View style={styles.divider} />
       <View style={styles.headRow}>
@@ -133,6 +211,17 @@ const styles = StyleSheet.create({
   title: { color: colors.onSurface, fontWeight: "800", fontSize: 14 },
   sub: { color: colors.muted, fontSize: 12, marginTop: 2, lineHeight: 17 },
   divider: { height: 1, backgroundColor: colors.border },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  chip: {
+    flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: spacing.md, paddingVertical: 8,
+    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, minHeight: 36,
+  },
+  chipTxt: { color: colors.onSurface, fontSize: 12, fontWeight: "700" },
+  resetBtn: {
+    flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: colors.error,
+    paddingHorizontal: spacing.md, borderRadius: radius.pill, minHeight: 40,
+  },
+  resetTxt: { color: colors.onError, fontWeight: "900", fontSize: 12 },
   headRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   videoRow: {
     flexDirection: "row",

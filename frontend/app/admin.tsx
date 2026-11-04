@@ -24,6 +24,7 @@ import { uploadForm } from "@/src/utils/upload";
 import TournamentAdmin from "@/src/components/TournamentAdmin";
 import CategoryLogosAdmin from "@/src/components/CategoryLogosAdmin";
 import StoreAdmin from "@/src/components/StoreAdmin";
+import F100Admin from "@/src/components/F100Admin";
 import { CATEGORY_LABEL, QUIZ_CATEGORY_KEYS, type Category } from "@/src/data/quiz";
 import { absolutePhotoUrl, type ApiPlayer } from "@/src/data/questions";
 import { absoluteFileUrl, useAppSettings } from "@/src/hooks/useAppSettings";
@@ -1125,6 +1126,8 @@ export default function AdminScreen() {
             )}
           </Pressable>
         </View>
+
+        <F100Admin />
 
         <StoreAdmin />
 
