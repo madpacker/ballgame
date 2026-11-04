@@ -1,0 +1,46 @@
+{
+  "summary": "Iter19: Profile Settings (/settings), Game Store (/store + StoreAdmin), redesigned Profile with KOLEKSI KARTU, Home text/layout. Backend: new test_iter19_store_profile.py 18/18 pass (name update+validation, avatar upload→absolute URL served, 7-day cooldown 429, admin-only store CRUD 401/403, create/edit/soft-delete, redeem 200/402/410/409/404, balance decreases while xp/level unchanged, concurrent 5x double-tap → exactly one charge). Full regression -n 0: 318/327 first run; 8 leaderboard failures were caused by MY FE seed inserting a minimal best_scores doc (fixed seed, re-ran: all pass) and test_iter18 xp_empty_user needed new spent/balance keys (test updated). Frontend (390 & 360): home gear→/settings, all settings elements render, name change→'Profil berhasil disimpan!' and home shows new name, photo upload via picker works, cooldown msg 'Foto bisa diganti lagi pada …' shown, short-name validation; admin adds card with image + edits stock; /store shows card w/ TUKAR, redeem → balance 1.500→900, button DIMILIKI, stock 2→1, persists after reload; profile KOLEKSI KARTU shows owned card; profile gear→/settings. Home: TOURNAMENT one line, nav labels not clipped at 360/390, about text updated.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/leaderboard", "issue": "Returns 500 if any best_scores doc lacks name/category/correct/total/created_at (LeaderboardEntry(**doc) server.py:505). Real writes are complete, but one malformed doc takes down the whole leaderboard; consider skipping/defaulting invalid docs."},
+      {"endpoint": "POST /api/store/cards/{id}/redeem", "issue": "user_cards stores a snapshot of title/image_url; later admin edits of the card image/title are not reflected in users' KOLEKSI KARTU (may be intended)."},
+      {"endpoint": "POST /api/auth/session", "issue": "custom_name/custom_picture preservation verified by code review only (server.py:267-274); cannot exercise real Google exchange in tests."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "StoreAdmin Poin/Stok row", "issue": "Price & stock TextInputs each render ~201px wide inside a flex row (flex:1 ignored on web due to intrinsic input width); Stok input overflows the card/screen (x=242,w=201 on 360px viewport). Add minWidth:0/width:0 with flex:1 or explicit widths.", "testID": "store-card-stock", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Profile HIGH-CLASSIC / HIGH-TIME ATTACK boxes", "issue": "Values come from getLocalHigh() (device storage) not the server; logged-in user with server best_scores (1500) sees 0 on a new device/browser.", "affected_testIDs": []}
+    ],
+    "design_issues": [
+      {"screen": "Home (360px)", "issues": ["Lower 'TIME ATTACK' title in Time Attack card truncates to 'TIME ATTA…'", "Mode Classic subtitle still wraps into 5 narrow lines ('- 10 soal • poin akurasi • ritme santai')"]},
+      {"screen": "Store", "issues": ["TUKAR button minHeight 36 (<44 touch target)", "Stock text fontSize 9 is very small"]},
+      {"screen": "Profile", "issues": ["Long username pill overflows the avatar glass card edges", "Jersey pill row: THIRD pill dot overlaps CHAMPION pill"]},
+      {"screen": "Admin", "issues": ["Store card delete has no confirmation"]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter19_store_profile.py", "/app/backend/tests/seed_iter19_fe.py", "/app/test_reports/pytest/pytest_iter19.xml"],
+  "action_items": [
+    "Fix StoreAdmin price/stock row overflow (store-card-price/store-card-stock) on mobile web",
+    "Profile HIGH boxes: use server best scores (e.g., /me best_scores) instead of local-only storage",
+    "Harden /api/leaderboard against incomplete best_scores docs",
+    "Optional: TUKAR touch target ≥44, Home 360px 'TIME ATTA…' truncation & Mode Classic subtitle wrap"
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~2960 lines and admin.tsx >1100 lines; should be split into modules",
+    "Redeem is atomic and race-safe (verified with 5 parallel requests; unique index user_cards(user_id,card_id) exists)",
+    "Avatar URL built from x-forwarded-host header; fine for preview but ties stored picture URL to the host that served the upload",
+    "Uploaded test images remain in object storage (no delete API)"
+  ],
+  "updated_files": ["/app/backend/tests/test_iter19_store_profile.py (new)", "/app/backend/tests/seed_iter19_fe.py (new)", "/app/backend/tests/test_iter18_xp.py (expect spent/balance keys)"],
+  "success_rate": {"backend": "100% (after test-data fix)", "frontend": "95%"},
+  "seed_data_creation": "TEST_it19*/TEST_it19fe* users, sessions, best_scores, store_cards, user_cards created and fully cleaned (verified 0 remain). Tos Joki untouched; tournament not touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use seed_iter19_fe.py seed|clean for FE (admin TEST_tok_it19fe_admin with 1500 XP; TEST_tok_it19fe_cool in photo cooldown). best_scores docs must contain name/category/correct/total/created_at or /api/leaderboard 500s. Web file chooser works for change-photo-button and store-card-pick. Redeem success uses window.alert dialog.",
+  "rca_of_issue": "Leaderboard 500 during regression: seed inserted best_scores without required LeaderboardEntry fields → pydantic ValidationError at server.py:505. Test-data issue, fixed in seeds."
+}

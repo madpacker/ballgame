@@ -13,6 +13,7 @@ export type AppSettings = {
   description?: string | null;
   socials: Socials;
   tournament_enabled?: boolean;
+  category_logos?: Record<string, string>;
 };
 
 const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;

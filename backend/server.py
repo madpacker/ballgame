@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, Header, HTTPException, Depends, UploadFile, File, Form, Query
+from fastapi import FastAPI, APIRouter, Header, HTTPException, Depends, UploadFile, File, Form, Query, Request
 from fastapi.responses import Response
 from fastapi.concurrency import run_in_threadpool
 from dotenv import load_dotenv
@@ -7,6 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import uuid
+import random
 import secrets
 import string
 import httpx
@@ -263,9 +264,14 @@ async def auth_session(body: SessionExchangeIn):
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
         user_id = existing["user_id"]
-        await db.users.update_one(
-            {"user_id": user_id}, {"$set": {"name": name, "picture": picture}}
-        )
+        # Keep a name / photo the user set in Pengaturan Profil instead of Google's.
+        upd = {}
+        if not existing.get("custom_name"):
+            upd["name"] = name
+        if not existing.get("custom_picture"):
+            upd["picture"] = picture
+        if upd:
+            await db.users.update_one({"user_id": user_id}, {"$set": upd})
         user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
     else:
         user_id = f"user_{uuid.uuid4().hex[:12]}"
@@ -496,7 +502,11 @@ async def leaderboard(
     cursor = db.best_scores.find(query, {"_id": 0}).sort("score", -1).limit(limit)
     results = []
     async for doc in cursor:
-        results.append(LeaderboardEntry(**doc))
+        try:
+            results.append(LeaderboardEntry(**doc))
+        except Exception:
+            # Skip a malformed row instead of failing the whole leaderboard.
+            logger.warning("skipping malformed best_scores row for %s", doc.get("user_id"))
     return results
 
 
@@ -912,8 +922,8 @@ class MatchIn(BaseModel):
 
 
 class MatchResult(BaseModel):
-    final_home: int
-    final_away: int
+    final_home: int = Field(ge=0, le=99)
+    final_away: int = Field(ge=0, le=99)
     scorer_player_ids: List[str] = Field(default_factory=list)
     motm_player_id: Optional[str] = None
 
@@ -1033,6 +1043,249 @@ class StreakLeader(BaseModel):
     best_streak: int
 
 
+XP_PER_LEVEL = 500
+
+
+async def _user_xp(uid: str) -> int:
+    """Total points across all modes (Classic total, Time Attack best, predictions, Tournament)."""
+    xp = 0
+    async for b in db.best_scores.find({"user_id": uid}, {"_id": 0, "score": 1}):
+        xp += int(b.get("score", 0) or 0)
+    async for t in db.tournament_boards.find({"user_id": uid, "board": {"$in": ["classic", "time_attack"]}}, {"_id": 0, "score": 1}):
+        xp += int(t.get("score", 0) or 0)
+    async for r in db.predictions.aggregate([
+        {"$match": {"user_id": uid, "points": {"$gt": 0}}},
+        {"$group": {"_id": None, "s": {"$sum": "$points"}}},
+    ]):
+        xp += int(r.get("s", 0) or 0)
+    return xp
+
+
+@api_router.get("/me/xp")
+async def my_xp(user: dict = Depends(get_current_user)):
+    xp = await _user_xp(user["user_id"])
+    fresh = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "xp_spent": 1})
+    spent = int((fresh or {}).get("xp_spent", 0) or 0)
+    best = {"classic": 0, "time_attack": 0}
+    async for b in db.best_scores.find({"user_id": user["user_id"]}, {"_id": 0, "mode": 1, "score": 1}):
+        if b.get("mode") in best:
+            best[b["mode"]] = int(b.get("score", 0) or 0)
+    return {
+        "xp": xp, "level": xp // XP_PER_LEVEL + 1, "level_xp": xp % XP_PER_LEVEL, "level_size": XP_PER_LEVEL,
+        "spent": spent, "balance": max(0, xp - spent), "best": best,
+    }
+
+
+# ---------- Profile settings (name + photo, photo once per 7 days) ----------
+AVATAR_COOLDOWN_DAYS = 7
+
+
+class ProfileNameIn(BaseModel):
+    name: str = Field(min_length=2, max_length=30)
+
+
+def _aware(dt):
+    return dt.replace(tzinfo=timezone.utc) if dt and dt.tzinfo is None else dt
+
+
+@api_router.get("/me/profile-settings")
+async def profile_settings(user: dict = Depends(get_current_user)):
+    last = _aware(user.get("avatar_changed_at"))
+    next_at = last + timedelta(days=AVATAR_COOLDOWN_DAYS) if last else None
+    can = next_at is None or datetime.now(timezone.utc) >= next_at
+    return {"name": user["name"], "picture": user.get("picture"), "can_change_photo": can,
+            "next_photo_change_at": None if can else next_at}
+
+
+@api_router.put("/me/profile")
+async def profile_update_name(body: ProfileNameIn, user: dict = Depends(get_current_user)):
+    name = re.sub(r"\s+", " ", body.name).strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=422, detail="invalid_name")
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"name": name, "custom_name": True}})
+    return {"ok": True, "name": name}
+
+
+@api_router.post("/me/avatar")
+async def profile_update_avatar(request: Request, image: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    last = _aware(user.get("avatar_changed_at"))
+    if last and datetime.now(timezone.utc) < last + timedelta(days=AVATAR_COOLDOWN_DAYS):
+        raise HTTPException(status_code=429, detail="photo_cooldown")
+    content = await image.read()
+    if not content or len(content) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="invalid_image")
+    ext = (image.filename or "avatar.jpg").rsplit(".", 1)[-1].lower()
+    if ext not in ("jpg", "jpeg", "png", "webp", "heic"):
+        ext = "jpg"
+    path = f"{APP_NAME}/uploads/{user['user_id']}/avatar_{uuid.uuid4().hex[:8]}.{ext}"
+    try:
+        await run_in_threadpool(put_object, path, content, image.content_type or f"image/{ext}")
+    except Exception as e:
+        logger.exception("avatar upload failed: %s", e)
+        raise HTTPException(status_code=500, detail="avatar_upload_failed")
+    # Pictures are rendered directly by clients, so store an absolute URL of this deployment.
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    proto = request.headers.get("x-forwarded-proto", "https")
+    url = f"{proto}://{host}/api/files/{path}"
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"picture": url, "custom_picture": True, "avatar_changed_at": datetime.now(timezone.utc)}},
+    )
+    return {"ok": True, "picture": url}
+
+
+# ---------- Store (Futcards redeemed with XP balance) ----------
+class StoreCardOut(BaseModel):
+    card_id: str
+    title: str
+    image_url: Optional[str] = None
+    price: int
+    stock: int
+    active: bool = True
+    order_index: int = 0
+
+
+def _card_out(d: dict) -> StoreCardOut:
+    return StoreCardOut(**{k: d.get(k) for k in StoreCardOut.model_fields if d.get(k) is not None})
+
+
+async def _store_image(user: dict, image: Optional[UploadFile], card_id: str) -> Optional[str]:
+    if image is None:
+        return None
+    content = await image.read()
+    if not content:
+        return None
+    ext = (image.filename or "card.png").rsplit(".", 1)[-1].lower()
+    if ext not in ("jpg", "jpeg", "png", "webp", "heic"):
+        ext = "png"
+    path = f"{APP_NAME}/uploads/{user['user_id']}/card_{card_id}_{uuid.uuid4().hex[:6]}.{ext}"
+    try:
+        await run_in_threadpool(put_object, path, content, image.content_type or f"image/{ext}")
+    except Exception as e:
+        logger.exception("card upload failed: %s", e)
+        raise HTTPException(status_code=500, detail="card_upload_failed")
+    return f"/api/files/{path}"
+
+
+@api_router.get("/store/cards", response_model=List[StoreCardOut])
+async def store_cards():
+    cur = db.store_cards.find({"active": True, "deleted_at": {"$exists": False}}, {"_id": 0}).sort(
+        [("order_index", 1), ("created_at", 1)])
+    return [_card_out(d) async for d in cur]
+
+
+@api_router.get("/admin/store/cards", response_model=List[StoreCardOut])
+async def store_cards_admin(user: dict = Depends(require_admin)):
+    cur = db.store_cards.find({"deleted_at": {"$exists": False}}, {"_id": 0}).sort(
+        [("order_index", 1), ("created_at", 1)])
+    return [_card_out(d) async for d in cur]
+
+
+@api_router.post("/admin/store/cards", response_model=StoreCardOut)
+async def store_card_create(
+    title: str = Form(...),
+    price: int = Form(...),
+    stock: int = Form(...),
+    active: bool = Form(True),
+    image: Optional[UploadFile] = File(None),
+    user: dict = Depends(require_admin),
+):
+    if not title.strip() or price < 0 or stock < 0:
+        raise HTTPException(status_code=422, detail="invalid_card")
+    card_id = f"sc_{uuid.uuid4().hex[:12]}"
+    count = await db.store_cards.count_documents({"deleted_at": {"$exists": False}})
+    doc = {
+        "card_id": card_id, "title": title.strip()[:40], "price": int(price), "stock": int(stock),
+        "active": bool(active), "order_index": count, "image_url": await _store_image(user, image, card_id),
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.store_cards.insert_one(doc)
+    return _card_out(doc)
+
+
+@api_router.put("/admin/store/cards/{card_id}", response_model=StoreCardOut)
+async def store_card_update(
+    card_id: str,
+    title: Optional[str] = Form(None),
+    price: Optional[int] = Form(None),
+    stock: Optional[int] = Form(None),
+    active: Optional[bool] = Form(None),
+    image: Optional[UploadFile] = File(None),
+    user: dict = Depends(require_admin),
+):
+    upd: dict = {"updated_at": datetime.now(timezone.utc)}
+    if title is not None and title.strip():
+        upd["title"] = title.strip()[:40]
+    if price is not None:
+        if price < 0:
+            raise HTTPException(status_code=422, detail="invalid_price")
+        upd["price"] = int(price)
+    if stock is not None:
+        if stock < 0:
+            raise HTTPException(status_code=422, detail="invalid_stock")
+        upd["stock"] = int(stock)
+    if active is not None:
+        upd["active"] = bool(active)
+    img = await _store_image(user, image, card_id)
+    if img:
+        upd["image_url"] = img
+    doc = await db.store_cards.find_one_and_update(
+        {"card_id": card_id, "deleted_at": {"$exists": False}}, {"$set": upd},
+        return_document=True, projection={"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="card_not_found")
+    return _card_out(doc)
+
+
+@api_router.delete("/admin/store/cards/{card_id}")
+async def store_card_delete(card_id: str, user: dict = Depends(require_admin)):
+    res = await db.store_cards.update_one({"card_id": card_id}, {"$set": {"deleted_at": datetime.now(timezone.utc)}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="card_not_found")
+    return {"ok": True}
+
+
+@api_router.post("/store/cards/{card_id}/redeem")
+async def store_card_redeem(card_id: str, user: dict = Depends(get_current_user)):
+    uid = user["user_id"]
+    card = await db.store_cards.find_one({"card_id": card_id, "active": True, "deleted_at": {"$exists": False}}, {"_id": 0})
+    if not card:
+        raise HTTPException(status_code=404, detail="card_not_found")
+    if await db.user_cards.find_one({"user_id": uid, "card_id": card_id}):
+        raise HTTPException(status_code=409, detail="already_owned")
+    price = int(card["price"])
+    xp = await _user_xp(uid)
+    # Reserve the XP atomically: only succeeds if balance still covers the price.
+    paid = await db.users.find_one_and_update(
+        {"user_id": uid, "$expr": {"$lte": [{"$add": [{"$ifNull": ["$xp_spent", 0]}, price]}, xp]}},
+        {"$inc": {"xp_spent": price}},
+    )
+    if not paid:
+        raise HTTPException(status_code=402, detail="insufficient_balance")
+    taken = await db.store_cards.find_one_and_update(
+        {"card_id": card_id, "stock": {"$gt": 0}}, {"$inc": {"stock": -1}})
+    if not taken:
+        await db.users.update_one({"user_id": uid}, {"$inc": {"xp_spent": -price}})
+        raise HTTPException(status_code=410, detail="out_of_stock")
+    try:
+        await db.user_cards.insert_one({
+            "user_id": uid, "card_id": card_id, "title": card["title"], "image_url": card.get("image_url"),
+            "price": price, "redeemed_at": datetime.now(timezone.utc),
+        })
+    except Exception:
+        # duplicate (double tap race) -> refund
+        await db.users.update_one({"user_id": uid}, {"$inc": {"xp_spent": -price}})
+        await db.store_cards.update_one({"card_id": card_id}, {"$inc": {"stock": 1}})
+        raise HTTPException(status_code=409, detail="already_owned")
+    return {"ok": True, "balance": max(0, xp - int((paid.get("xp_spent", 0) or 0)) - price)}
+
+
+@api_router.get("/me/cards")
+async def my_cards(user: dict = Depends(get_current_user)):
+    cur = db.user_cards.find({"user_id": user["user_id"]}, {"_id": 0, "user_id": 0}).sort("redeemed_at", 1)
+    return [d async for d in cur]
+
+
 @api_router.get("/top-streaks", response_model=List[StreakLeader])
 async def top_streaks(limit: int = 5):
     cursor = (
@@ -1130,8 +1383,9 @@ async def matches_set_result(match_id: str, body: MatchResult, user: dict = Depe
             "motm_player_id": motm_id,
         }},
     )
-    # Score each prediction and notify.
-    async for p in db.predictions.find({"match_id": match_id, "points": {"$exists": False}}, {"_id": 0}):
+    # Score (or re-score, when admin corrects a result) every prediction; notify on first scoring only.
+    async for p in db.predictions.find({"match_id": match_id}, {"_id": 0}):
+        first_time = p.get("points") is None
         exact = p["pred_home"] == final_home and p["pred_away"] == final_away
         pred_winner = (
             "home" if p["pred_home"] > p["pred_away"] else "away" if p["pred_away"] > p["pred_home"] else "draw"
@@ -1151,6 +1405,8 @@ async def matches_set_result(match_id: str, body: MatchResult, user: dict = Depe
         await db.predictions.update_one(
             {"prediction_id": p["prediction_id"]}, {"$set": {"points": points}}
         )
+        if not first_time:
+            continue
         try:
             parts = []
             if exact:
@@ -1336,6 +1592,7 @@ class AppSettingsOut(BaseModel):
     description: Optional[str] = None
     socials: SocialLinks = Field(default_factory=SocialLinks)
     tournament_enabled: bool = False
+    category_logos: dict = Field(default_factory=dict)
 
 
 class AppSettingsIn(BaseModel):
@@ -1355,6 +1612,7 @@ def _settings_to_out(doc: dict) -> AppSettingsOut:
         description=doc.get("description"),
         socials=SocialLinks(**socials),
         tournament_enabled=bool(doc.get("tournament_enabled", False)),
+        category_logos={k: v for k, v in (doc.get("category_logos") or {}).items() if v},
     )
 
 
@@ -1408,6 +1666,48 @@ async def upload_background(
         {"_key": "public"},
         {"$set": {"_key": "public", "background_url": url, "updated_at": datetime.now(timezone.utc), "updated_by": user["user_id"]}},
         upsert=True,
+    )
+    return _settings_to_out(await _load_app_settings())
+
+
+LOGO_CATEGORIES = {"all", "trivia", "garuda", "liga", "bali", "persebaya", "persib", "persija"}
+
+
+@api_router.post("/admin/category-logo/{category}", response_model=AppSettingsOut)
+async def upload_category_logo(
+    category: str,
+    image: UploadFile = File(...),
+    user: dict = Depends(require_admin),
+):
+    if category not in LOGO_CATEGORIES:
+        raise HTTPException(status_code=422, detail="invalid_category")
+    content = await image.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty_image")
+    ext = (image.filename or "logo.png").rsplit(".", 1)[-1].lower()
+    if ext not in ("jpg", "jpeg", "png", "webp", "heic"):
+        ext = "png"
+    path = f"{APP_NAME}/uploads/{user['user_id']}/catlogo_{category}_{uuid.uuid4().hex[:6]}.{ext}"
+    try:
+        await run_in_threadpool(put_object, path, content, image.content_type or f"image/{ext}")
+    except Exception as e:
+        logger.exception("category logo upload failed: %s", e)
+        raise HTTPException(status_code=500, detail="logo_upload_failed")
+    await db.app_settings.update_one(
+        {"_key": "public"},
+        {"$set": {"_key": "public", f"category_logos.{category}": f"/api/files/{path}",
+                  "updated_at": datetime.now(timezone.utc), "updated_by": user["user_id"]}},
+        upsert=True,
+    )
+    return _settings_to_out(await _load_app_settings())
+
+
+@api_router.delete("/admin/category-logo/{category}", response_model=AppSettingsOut)
+async def delete_category_logo(category: str, user: dict = Depends(require_admin)):
+    if category not in LOGO_CATEGORIES:
+        raise HTTPException(status_code=422, detail="invalid_category")
+    await db.app_settings.update_one(
+        {"_key": "public"}, {"$unset": {f"category_logos.{category}": ""}}, upsert=True
     )
     return _settings_to_out(await _load_app_settings())
 
@@ -1908,7 +2208,8 @@ async def news_comment_delete(comment_id: str, user: dict = Depends(get_current_
 
 
 # ---------- Quiz Items (Trivia Klub & Garuda Call) ----------
-ALLOWED_QUIZ_CATEGORIES = {"trivia", "garuda"}
+# trivia = "Madura United" (label renamed in UI; key kept for existing data).
+ALLOWED_QUIZ_CATEGORIES = {"trivia", "garuda", "liga", "bali", "persebaya", "persib", "persija"}
 
 
 class QuizItemOut(BaseModel):
@@ -1954,10 +2255,12 @@ def _assert_category(category: str):
 
 @api_router.get("/quiz-items", response_model=List[QuizItemOut])
 async def quiz_items_public(category: str):
-    _assert_category(category)
+    if category != "all":
+        _assert_category(category)
+    cat_q = {"$in": list(ALLOWED_QUIZ_CATEGORIES)} if category == "all" else category
     cursor = db.quiz_items.find(
         {
-            "category": category,
+            "category": cat_q,
             "active": True,
             "deleted_at": {"$exists": False},
         },
@@ -2523,6 +2826,45 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _migrate_players_to_trivia():
+    """One-time: turn every 'Tebak Pemain' player photo into a Madura United (trivia) picture question."""
+    flag = await db.app_settings.find_one({"_key": "migrations"}, {"_id": 0})
+    if flag and flag.get("players_to_trivia_v1"):
+        return
+    players = await db.players.find({"deleted_at": {"$exists": False}}, {"_id": 0}).to_list(2000)
+    names = list({p["name"] for p in players if p.get("name")})
+    fallback = ["Beto Goncalves", "Greg Nwokolo", "Zah Rahan", "Bayu Gatra", "Fachruddin Aryanto", "Slamet Nurcahyo"]
+    last = await db.quiz_items.find({"category": "trivia"}, {"_id": 0, "order_index": 1}).sort("order_index", -1).limit(1).to_list(1)
+    order = int(last[0]["order_index"]) + 1 if last else 0
+    n = 0
+    for p in players:
+        if not p.get("photo_url") or p.get("included_in_quiz") is False:
+            continue
+        if await db.quiz_items.find_one({"source_player_id": p["player_id"]}):
+            continue
+        pool = [x for x in names + fallback if x != p["name"]]
+        random.shuffle(pool)
+        distractors = list(dict.fromkeys(pool))[:3]
+        opts = distractors + [p["name"]]
+        random.shuffle(opts)
+        now = datetime.now(timezone.utc)
+        await db.quiz_items.insert_one({
+            "item_id": f"qi_{uuid.uuid4().hex[:12]}", "category": "trivia",
+            "prompt": "Siapa pemain Madura United ini?", "image_url": p["photo_url"],
+            "options": opts, "answer_index": opts.index(p["name"]), "active": True,
+            "order_index": order, "created_at": now, "updated_at": now,
+            "created_by": "migration", "source_player_id": p["player_id"],
+        })
+        order += 1
+        n += 1
+    await db.app_settings.update_one(
+        {"_key": "migrations"},
+        {"$set": {"_key": "migrations", "players_to_trivia_v1": True}},
+        upsert=True,
+    )
+    logger.info("players->trivia migration: %d questions", n)
+
+
 async def _migrate_classic_cumulative():
     """One-time: rebuild Classic leaderboard rows as the SUM of all past Classic sessions."""
     flag = await db.app_settings.find_one({"_key": "migrations"}, {"_id": 0})
@@ -2594,6 +2936,8 @@ async def startup_indexes():
         await db.quiz_items.create_index("item_id", unique=True)
         await db.quiz_items.create_index([("category", 1), ("active", 1), ("order_index", 1)])
         await db.game_sessions.create_index("game_id", unique=True)
+        await db.user_cards.create_index([("user_id", 1), ("card_id", 1)], unique=True)
+        await db.store_cards.create_index("card_id", unique=True)
         await db.game_sessions.create_index("started_at", expireAfterSeconds=86400)
         await db.tournament_boards.create_index([("board", 1), ("user_id", 1)], unique=True)
         await db.tournament_boards.create_index([("board", 1), ("score", -1)])
@@ -2607,6 +2951,10 @@ async def startup_indexes():
         await _migrate_classic_cumulative()
     except Exception as e:
         logger.warning("classic cumulative migration issue: %s", e)
+    try:
+        await _migrate_players_to_trivia()
+    except Exception as e:
+        logger.warning("players->trivia migration issue: %s", e)
 
     try:
         await run_in_threadpool(init_storage)

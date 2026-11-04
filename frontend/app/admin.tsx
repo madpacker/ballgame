@@ -22,6 +22,9 @@ import { useAuth } from "@/src/contexts/auth";
 import { api, getToken } from "@/src/api";
 import { uploadForm } from "@/src/utils/upload";
 import TournamentAdmin from "@/src/components/TournamentAdmin";
+import CategoryLogosAdmin from "@/src/components/CategoryLogosAdmin";
+import StoreAdmin from "@/src/components/StoreAdmin";
+import { CATEGORY_LABEL, QUIZ_CATEGORY_KEYS, type Category } from "@/src/data/quiz";
 import { absolutePhotoUrl, type ApiPlayer } from "@/src/data/questions";
 import { absoluteFileUrl, useAppSettings } from "@/src/hooks/useAppSettings";
 
@@ -35,6 +38,8 @@ type AdminMatch = {
   home: boolean;
   final_home?: number | null;
   final_away?: number | null;
+  scorer_player_ids?: string[];
+  motm_player_id?: string | null;
   status: "upcoming" | "live" | "finished";
 };
 
@@ -48,7 +53,7 @@ type AdminNews = {
 
 type AdminQuizItem = {
   item_id: string;
-  category: "trivia" | "garuda";
+  category: Category;
   prompt: string;
   image_url?: string | null;
   options: string[];
@@ -102,7 +107,7 @@ export default function AdminScreen() {
   const [newsSubmitting, setNewsSubmitting] = useState(false);
 
   // Quiz Items (Trivia & Garuda Call)
-  const [quizCat, setQuizCat] = useState<"trivia" | "garuda">("trivia");
+  const [quizCat, setQuizCat] = useState<Category>("trivia");
   const [quizItems, setQuizItems] = useState<AdminQuizItem[]>([]);
   const [qiPrompt, setQiPrompt] = useState("");
   const [qiOptions, setQiOptions] = useState<string[]>(["", "", "", ""]);
@@ -323,7 +328,10 @@ export default function AdminScreen() {
     if (!resultOpen) return;
     const h = parseInt(resH, 10);
     const a = parseInt(resA, 10);
-    if (isNaN(h) || isNaN(a)) return;
+    if (isNaN(h) || isNaN(a)) {
+      setMsg({ kind: "err", txt: "Isi skor akhir kedua tim dulu." });
+      return;
+    }
     try {
       await api(`/admin/matches/${resultOpen}/result`, {
         method: "POST",
@@ -341,8 +349,8 @@ export default function AdminScreen() {
       setResScorerIds([]);
       setResMotmId(null);
       refresh();
-    } catch {
-      setMsg({ kind: "err", txt: "Gagal simpan hasil." });
+    } catch (e) {
+      setMsg({ kind: "err", txt: `Gagal simpan hasil. ${String(e).slice(0, 80)}` });
     }
   };
 
@@ -966,11 +974,23 @@ export default function AdminScreen() {
                     {m.final_home != null && ` · ${m.final_home}-${m.final_away}`}
                   </Text>
                 </View>
-                {m.status !== "finished" && m.final_home == null && (
-                  <Pressable testID={`set-result-${m.match_id}`} onPress={() => setResultOpen(m.match_id)} hitSlop={8}>
-                    <Ionicons name="flag" size={20} color={colors.brandSecondary} />
-                  </Pressable>
-                )}
+                {/* Admin can enter the final score any time (even after the auto "finished" window) and correct it later. */}
+                <Pressable
+                  testID={`set-result-${m.match_id}`}
+                  onPress={() => {
+                    setResH(m.final_home != null ? String(m.final_home) : "");
+                    setResA(m.final_away != null ? String(m.final_away) : "");
+                    // Keep scorers & MOTM so a score correction doesn't wipe bonus points.
+                    setResScorerIds(m.scorer_player_ids ?? []);
+                    setResMotmId(m.motm_player_id ?? null);
+                    setResultOpen(m.match_id);
+                  }}
+                  hitSlop={8}
+                  style={styles.resultBtn}
+                >
+                  <Ionicons name={m.final_home == null ? "flag" : "create"} size={16} color={colors.onBrandSecondary} />
+                  <Text style={styles.resultBtnTxt}>{m.final_home == null ? "HASIL" : "UBAH"}</Text>
+                </Pressable>
                 <Pressable testID={`delete-match-${m.match_id}`} onPress={() => deleteMatch(m.match_id)} hitSlop={8}>
                   <Ionicons name="trash" size={20} color={colors.error} />
                 </Pressable>
@@ -1106,53 +1126,30 @@ export default function AdminScreen() {
           </Pressable>
         </View>
 
-        {/* QUIZ ITEMS (Trivia Klub & Garuda Call) */}
+        <StoreAdmin />
+
+        <CategoryLogosAdmin />
+
+        {/* QUIZ ITEMS (all categories) */}
         <View style={styles.formCard}>
           <View style={styles.qiHeader}>
             <Text style={styles.sectionLabel}>SOAL QUIZ · {quizItems.length}</Text>
-            <View style={styles.segment}>
-              <Pressable
-                testID="qi-tab-trivia"
-                onPress={() => {
-                  setQuizCat("trivia");
-                  resetQiForm();
-                }}
-                style={[
-                  styles.segmentBtn,
-                  quizCat === "trivia" && styles.segmentBtnActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.segmentTxt,
-                    quizCat === "trivia" && styles.segmentTxtActive,
-                  ]}
-                >
-                  TRIVIA KLUB
-                </Text>
-              </Pressable>
-              <Pressable
-                testID="qi-tab-garuda"
-                onPress={() => {
-                  setQuizCat("garuda");
-                  resetQiForm();
-                }}
-                style={[
-                  styles.segmentBtn,
-                  quizCat === "garuda" && styles.segmentBtnActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.segmentTxt,
-                    quizCat === "garuda" && styles.segmentTxtActive,
-                  ]}
-                >
-                  GARUDA CALL
-                </Text>
-              </Pressable>
-            </View>
           </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm as number }}>
+            {QUIZ_CATEGORY_KEYS.map((k) => (
+              <Pressable
+                key={k}
+                testID={`qi-tab-${k}`}
+                onPress={() => {
+                  setQuizCat(k);
+                  resetQiForm();
+                }}
+                style={[chipStyles.chip, quizCat === k && chipStyles.chipActive]}
+              >
+                <Text style={chipStyles.chipTxt}>{CATEGORY_LABEL[k]}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
 
           <Pressable testID="pick-qi-image" onPress={pickQiImage} style={styles.photoPicker}>
             {qiImage ? (
@@ -1187,7 +1184,9 @@ export default function AdminScreen() {
               placeholder={
                 quizCat === "trivia"
                   ? "mis. Siapa pemain ini? / Apa stadion ini?"
-                  : "mis. Kapten Timnas Indonesia saat lolos Piala Asia 2023?"
+                  : quizCat === "garuda"
+                    ? "mis. Kapten Timnas Indonesia saat lolos Piala Asia 2023?"
+                    : `mis. Pertanyaan seputar ${CATEGORY_LABEL[quizCat]}`
               }
               placeholderTextColor={colors.muted}
               multiline
@@ -1300,7 +1299,7 @@ export default function AdminScreen() {
 
         <View>
           <Text style={styles.sectionLabel}>
-            DAFTAR SOAL {quizCat === "trivia" ? "TRIVIA KLUB" : "GARUDA CALL"}
+            DAFTAR SOAL {CATEGORY_LABEL[quizCat].toUpperCase()}
           </Text>
           {quizItems.length === 0 && (
             <Text style={styles.muted}>Belum ada soal. Tambahkan di atas.</Text>
@@ -1592,6 +1591,17 @@ function GateView({
 }
 
 const styles = StyleSheet.create({
+  resultBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.brandSecondary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    minHeight: 32,
+  },
+  resultBtnTxt: { color: colors.onBrandSecondary, fontWeight: "900", fontSize: 11 },
   container: { flex: 1, backgroundColor: colors.surface },
   header: {
     paddingHorizontal: spacing.md,

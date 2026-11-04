@@ -1,4 +1,7 @@
-import { View, Text, Pressable, StyleSheet, ScrollView, Platform } from "react-native";
+import { View, Text, Pressable, StyleSheet, ScrollView, Platform, ImageBackground } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import BottomNav from "@/src/components/BottomNav";
+import FutCard from "@/src/components/FutCard";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
@@ -32,6 +35,7 @@ export default function Profile() {
   const { settings } = useAppSettings();
   const [high, setHigh] = useState<LocalHigh>({ classic: 0, time_attack: 0 });
   const [badges, setBadges] = useState<Badge[]>([]);
+  const [cards, setCards] = useState<{ card_id: string; title: string; image_url?: string | null }[]>([]);
 
   useEffect(() => {
     getLocalHigh().then(setHigh);
@@ -40,8 +44,14 @@ export default function Profile() {
   useEffect(() => {
     if (user) {
       api<Badge[]>("/me/badges").then(setBadges).catch(() => setBadges([]));
+      api<{ card_id: string; title: string; image_url?: string | null }[]>("/me/cards").then(setCards).catch(() => setCards([]));
+      // Server values win so a fresh device still shows the real scores (Classic = cumulative total).
+      api<{ best: LocalHigh }>("/me/xp")
+        .then((r) => r.best && setHigh((h) => ({ classic: r.best.classic || h.classic, time_attack: Math.max(r.best.time_attack, h.time_attack) })))
+        .catch(() => {});
     } else {
       setBadges([]);
+      setCards([]);
     }
   }, [user]);
 
@@ -52,21 +62,25 @@ export default function Profile() {
   };
 
   return (
-    <View style={styles.container}>
+    <ImageBackground source={require("@/assets/bg/stadium.jpg")} style={styles.container} resizeMode="cover">
+      <LinearGradient colors={["rgba(10,40,110,0.5)", "rgba(7,22,55,0.85)", "rgba(7,22,55,0.98)"]} style={StyleSheet.absoluteFill} />
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <Pressable testID="back-button" onPress={() => router.back()} hitSlop={10} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
         </Pressable>
         <Text style={styles.headerTitle}>PROFIL</Text>
-        <View style={{ width: 32 }} />
+        <Pressable testID="profile-settings-button" onPress={() => router.push("/settings")} hitSlop={10} style={styles.backBtn}>
+          <Ionicons name="settings-sharp" size={22} color={LOBBY.white} />
+        </Pressable>
       </View>
 
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + 60, gap: spacing.lg }}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.card}>
-          <View style={styles.avatarWrap}>
+        <View style={styles.topRow}>
+        <View style={[styles.card, styles.glass, { flex: 1 }]}>
+          <View style={[styles.avatarWrap, styles.goldRing]}>
             {user?.picture ? (
               <Image source={user.picture} style={styles.avatar} />
             ) : (
@@ -89,15 +103,16 @@ export default function Profile() {
           )}
         </View>
 
-        <View style={styles.statGrid}>
-          <View style={styles.stat}>
-            <Text style={styles.statLabel}>HIGH · CLASSIC</Text>
-            <Text style={styles.statValue}>{high.classic}</Text>
+        <View style={styles.highCol}>
+          <View style={[styles.stat, styles.glass]}>
+            <Text style={styles.highLbl}>HIGH - CLASSIC</Text>
+            <Text style={styles.highVal}>{high.classic}</Text>
           </View>
-          <View style={styles.stat}>
-            <Text style={styles.statLabel}>HIGH · TIME ATTACK</Text>
-            <Text style={styles.statValue}>{high.time_attack}</Text>
+          <View style={[styles.stat, styles.glass]}>
+            <Text style={styles.highLbl}>HIGH - TIME ATTACK</Text>
+            <Text style={styles.highVal}>{high.time_attack}</Text>
           </View>
+        </View>
         </View>
 
         <Pressable
@@ -111,7 +126,7 @@ export default function Profile() {
         </Pressable>
 
         {user && (
-          <View style={styles.skinCard}>
+          <View style={[styles.skinCard, styles.glass]}>
             <Text style={styles.skinLabel}>TEMA JERSEY QUIZ</Text>
             <View style={styles.skinRow}>
               {(Object.keys(SKINS) as SkinKey[]).map((k) => {
@@ -150,7 +165,7 @@ export default function Profile() {
         )}
 
         {user && (user.current_streak ?? 0) > 0 && (
-          <View style={styles.streakCard}>
+          <View style={[styles.streakCard, styles.glass]}>
             <Text style={{ fontSize: 24 }}>🔥</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.skinLabel}>STREAK HARIAN</Text>
@@ -162,7 +177,7 @@ export default function Profile() {
         )}
 
         {user && badges.length > 0 && (
-          <View style={styles.badgeCard}>
+          <View style={[styles.badgeCard, styles.glass]}>
             <Text style={styles.skinLabel}>PIAGAM MINGGUAN · {badges.length}</Text>
             <View style={styles.badgeGrid}>
               {badges.slice(0, 6).map((b) => (
@@ -181,6 +196,25 @@ export default function Profile() {
           </View>
         )}
 
+        {user && (
+          <View testID="card-collection" style={[styles.badgeCard, styles.glass]}>
+            <Text style={styles.collTitle}>KOLEKSI KARTU</Text>
+            {cards.length === 0 ? (
+              <Pressable testID="go-store" onPress={() => router.push("/store")}>
+                <Text style={styles.collEmpty}>Belum punya kartu. Tukar poin XP di Store →</Text>
+              </Pressable>
+            ) : (
+              <View style={styles.collGrid}>
+                {cards.map((c) => (
+                  <View key={c.card_id} testID={`owned-card-${c.card_id}`} style={styles.collCell}>
+                    <FutCard card={c} />
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
+
         <Pressable
           testID="news-link"
           onPress={() => router.push("/news")}
@@ -196,7 +230,7 @@ export default function Profile() {
           !!settings.socials?.tiktok ||
           !!settings.socials?.whatsapp ||
           !!settings.socials?.youtube) && (
-          <View style={styles.socialCard}>
+          <View style={[styles.socialCard, styles.glass]}>
             <Text style={styles.skinLabel}>IKUTI ADMIN</Text>
             {settings.description ? (
               <Text style={styles.socialDesc}>{settings.description}</Text>
@@ -253,7 +287,7 @@ export default function Profile() {
             style={styles.linkRow}
           >
             <Ionicons name="shield-checkmark" size={22} color={colors.brandSecondary} />
-            <Text style={styles.linkTxt}>Database Pemain (Admin)</Text>
+            <Text style={styles.linkTxt}>Dashboard Admin</Text>
             <Ionicons name="chevron-forward" size={20} color={colors.muted} />
           </Pressable>
         )}
@@ -274,12 +308,26 @@ export default function Profile() {
           </Pressable>
         )}
       </ScrollView>
-    </View>
+      <BottomNav active="profile" />
+    </ImageBackground>
   );
 }
 
+// Lobby palette for the redesigned profile (fixed across themes).
+const LOBBY = { white: "#FFFFFF", gold: "#F2C24E", glass: "rgba(12,26,62,0.82)" };
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.surface },
+  glass: { backgroundColor: LOBBY.glass, borderWidth: 1.5, borderColor: "rgba(242,194,78,0.55)" },
+  goldRing: { borderWidth: 4, borderColor: LOBBY.gold, shadowColor: LOBBY.gold, shadowOpacity: 0.8, shadowRadius: 12, shadowOffset: { width: 0, height: 0 } },
+  topRow: { flexDirection: "row", gap: spacing.sm },
+  highCol: { flex: 1, gap: spacing.sm },
+  highLbl: { color: LOBBY.gold, fontSize: 11, fontWeight: "900", textAlign: "center" },
+  highVal: { color: LOBBY.gold, fontSize: 34, fontWeight: "900", textAlign: "center", textShadowColor: "#FF7A1A", textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 8 },
+  collTitle: { color: LOBBY.gold, fontSize: 22, fontWeight: "900", fontStyle: "italic", textAlign: "center", marginBottom: spacing.sm },
+  collEmpty: { color: LOBBY.white, textAlign: "center", fontSize: 13 },
+  collGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: spacing.sm },
+  collCell: { width: "32%" },
+  container: { flex: 1, backgroundColor: "#071637" },
   header: {
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.md,
@@ -288,7 +336,10 @@ const styles = StyleSheet.create({
     gap: spacing.sm as number,
   },
   backBtn: { padding: spacing.xs },
-  headerTitle: { flex: 1, color: colors.onSurface, fontSize: 18, fontWeight: "900", letterSpacing: 2, textAlign: "center" },
+  headerTitle: {
+    flex: 1, color: "#E6F0FF", fontSize: 34, fontWeight: "900", fontStyle: "italic", textAlign: "center",
+    textShadowColor: "#5FB4FF", textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 14,
+  },
   card: {
     backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.lg,

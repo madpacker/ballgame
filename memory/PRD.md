@@ -43,3 +43,8 @@
 - Anti-cheat: POST /api/games/start returns one-time game_id required by POST /api/scores (409 on reuse); score/correct/total validated & capped.
 - Min play time enforced on /scores (classic ≥0.8s/question, TA ≥50s, T-TA ≥80s). TA total now counts answered questions.
 - Backlog: challenge completion (/challenges/{id}/complete) not yet ticket-protected.
+- Categories: trivia (label "Madura United"), garuda, liga, bali, persebaya, persib, persija (CSV per category). Tebak Pemain/Sejarah Pemain removed; player photos migrated into trivia (players_to_trivia_v1). Admin category logos (/api/admin/category-logo/{k}).
+- Category screen: stadium neon redesign. Match result button always available (HASIL/UBAH), re-scoring predictions.
+- Home redesigned as game lobby (profile bar + level/XP from /api/me/xp, 500 XP per level, bento grid, BottomNav: Leaderboard/Prediksi/Berita/Store/Profil + MULAI). Art slots in src/data/homeArt.ts (awaiting owner images). /store = coming soon (awaiting owner design).
+- Pengaturan Profil (/settings): name edit + avatar upload (once/7 days), custom name/photo kept across Google logins.
+- Game Store (/store): admin Futcards (photo, price, stock) redeemed with XP balance (xp - xp_spent; level unaffected), one per user; owned cards in Profile "KOLEKSI KARTU". Profile redesigned (stadium/glass).

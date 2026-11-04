@@ -108,7 +108,8 @@ export default function QuizScreen() {
         category,
         score: String(useScore),
         correct: String(useCorrect),
-        total: String(classicLike ? CLASSIC_COUNT : Math.max(answeredCountRef.current, useCorrect)),
+        // Real number of questions played (a category may hold fewer than the target count).
+        total: String(classicLike ? Math.min(CLASSIC_COUNT, queue.length) : Math.max(answeredCountRef.current, useCorrect)),
         ...(params.challenge ? { challenge: String(params.challenge) } : {}),
         ...(gameIdRef.current ? { game_id: gameIdRef.current } : {}),
       },
@@ -180,7 +181,7 @@ export default function QuizScreen() {
         ? qTimeLeft / T_QUESTION_SECONDS
         : !classicLike
           ? timeLeft / TIME_SECONDS
-          : (index + 1) / CLASSIC_COUNT;
+          : (index + 1) / Math.max(1, Math.min(CLASSIC_COUNT, queue.length));
     return { width: `${Math.max(0, Math.min(1, pct)) * 100}%` };
   });
 
@@ -269,7 +270,9 @@ export default function QuizScreen() {
           {!isLoading && (
             <Pressable
               testID="back-to-category"
-              onPress={() => router.replace(isTournament ? "/tournament" : "/category")}
+              onPress={() =>
+                router.replace(isTournament ? "/tournament" : { pathname: "/category", params: { mode } })
+              }
               style={styles.emptyCta}
             >
               <Ionicons name="chevron-back" size={16} color={colors.onBrandPrimary} />
@@ -306,7 +309,7 @@ export default function QuizScreen() {
             {mode === "t_classic"
               ? `${qTimeLeft}s · Q${index + 1}/${Math.min(CLASSIC_COUNT, queue.length)}`
               : classicLike
-                ? `Q${index + 1}/${CLASSIC_COUNT}`
+                ? `Q${index + 1}/${Math.min(CLASSIC_COUNT, queue.length)}`
                 : `${timeLeft}s · Q${index + 1}`}
           </Text>
         </View>

@@ -1,0 +1,48 @@
+{
+  "summary": "Iter18 covered the game-lobby Home redesign, GET /api/me/xp, the bottom nav and Store, the fix for Classic in small categories, and the admin UBAH pre-fill. Backend: 309/309 regression tests pass, including the new test_iter18_xp.py (5/5). Every functional flow passes. Frontend navigation works for all 13 cards, buttons and nav items at 360x740. Classic in 'trivia' (1 question) shows Q1/1, POST /scores returns 200, accuracy is 100% and the classic total is correct. UBAH pre-selects the 2-1 score, the scorer and the MOTM. What remains is visual: long titles break in the middle of a word on 360 and 390 widths. No deprecated Expo packages detected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/scores", "issue": "The game_too_fast minimum is total*0.8s, and the client now chooses total. A crafted request with total=1, correct=1 is accepted after 0.8s, and score is capped at correct*NORMAL_POINT, which is 100 points. This is low risk because the one-time game ticket still applies, but an attacker can farm 100 pts per ~1s game via the API. Consider checking total against the actual pool size of the category on the server."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Home TOURNAMENT card title", "issue": "The 24px italic title 'TOURNAMENT' does not fit the ~179px column. It breaks in the middle of the word: 'TOURNAME/NT' at 390px and 'TOURNAM/ENT' at 360px.", "testID": "mode-tournament-button", "priority": "HIGH"},
+      {"component": "Home Classic card subtitle", "issue": "At 360px the 16px 'Mode Classic' subtitle breaks as 'Mode / Classi / c'. Its info line also wraps to 3 lines.", "testID": "mode-classic-button", "priority": "MEDIUM"},
+      {"component": "BottomNav label", "issue": "'Leaderboard' is cut off as 'Leaderb…' at both 360 and 390 (scrollWidth 61 vs 50). Use a shorter label such as 'Peringkat' or 'Ranking', or a smaller font.", "testID": "nav-leaderboard", "priority": "MEDIUM"},
+      {"component": "Quiz progress bar (Classic)", "issue": "The width is (index+1)/CLASSIC_COUNT (quiz.tsx:184), so a 1-question category shows ~10% filled on Q1/1. It should use min(CLASSIC_COUNT, queue.length).", "testID": "progress-text", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Home", "issues": [
+        "The TIME ATTACK card shows the title twice (top and above the '60 detik' line). The Classic card shows 'MODE CLASSIC' and 'Mode Classic'. Both feel redundant; check against the reference.",
+        "The Time Attack placeholder 'walk' icons are clipped at the card edges at 360px. Icons are placeholders, so this is minor.",
+        "A long name is shortened with an ellipsis ('TEST LOBBY AD…'), which is fine. The Tentang Game body has no final period."
+      ]},
+      {"screen": "Admin result modal", "issues": ["Pre-selected scorer and MOTM chips can sit off-screen in the horizontal list, so the admin can't see what is selected. Sort selected chips first or scroll to them. The admin header still reads 'DATABASE PEMAIN' (LOW item left over from iteration 17)."]},
+      {"screen": "Quiz", "issues": ["The question photo is a 431KB jpg and shows as an empty grey box while it loads, with no loading indicator. Consider a placeholder or spinner, and resizing on upload."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter18_xp.py", "/app/backend/tests/seed_iter18_fe.py", "/app/test_reports/pytest/pytest_iter18.xml"],
+  "action_items": [
+    "HIGH: Fix the 'TOURNAMENT' title so it doesn't break in the middle of the word (index.tsx cardTitle in the ~179px column). Use fontSize ~20 with adjustsFontSizeToFit/numberOfLines={1}, or a smaller title size for that card. Verify at 360 and 390.",
+    "MEDIUM: Fix the 'Mode Classic' subtitle breaking at 360 (classicSubTitle). Use a smaller font, numberOfLines, or drop the duplicate subtitle.",
+    "MEDIUM: Fix the cut-off 'Leaderboard' nav label (BottomNav label, fontSize 10, item ~50px wide). Rename it or allow adjustsFontSizeToFit.",
+    "LOW: quiz.tsx:184 progress bar should divide by Math.min(CLASSIC_COUNT, queue.length).",
+    "LOW: In the admin result modal, show pre-selected scorer/MOTM chips first.",
+    "LOW (security): On the server, check the classic total against the active pool size of the category, or require at least N questions, so total=1 can't be used to farm points quickly."
+  ],
+  "critical_code_review_comments": [
+    "my_xp sums best_scores + tournament_boards (classic/time_attack only) + predictions points>0, with level = xp//500+1. Verified with seeded data: 840 -> LV2 340/500. The royal board is correctly excluded.",
+    "Home refetches XP with useFocusEffect, so XP updates after a game. The live-match poll every 60s is cleaned up properly.",
+    "admin.tsx is 1922 lines and server.py is 2734 lines. Both are well over 700 lines and should be split."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter18_xp.py (new)", "/app/backend/tests/seed_iter18_fe.py (new)"],
+  "success_rate": {"backend": "100% (309/309)", "frontend": "100% functional (navigation, XP, classic fix, UBAH pre-fill); 3 layout bugs"},
+  "seed_data_creation": "TEST_fe18_admin user/session/best_score(840) and match mt_TEST_fe18 (2-1, scorer pl_26fc6719e4c7, MOTM pl_5801b0aaaab2) were created and then deleted by id. pytest TEST_it18_* users were removed in teardown. The real user (Tos Joki) was not changed. The tournament is still disabled.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "FE auth: goto '/', wait 3s, set localStorage 'cakmad.session_token', goto '/' again. Seed with `python /app/backend/tests/seed_iter18_fe.py seed|state|cleanup`. Category 'trivia' has 1 quiz item, answer index 0. NORMAL_POINT=100. To check for text clipping, compare scrollWidth vs clientWidth on div[dir=auto]. Breaks in the middle of a word only show up in screenshots."
+}

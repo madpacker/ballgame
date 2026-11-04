@@ -1,35 +1,52 @@
-// All question content is now admin-managed via the backend:
-// - "guess" & "history" come from /api/players (admin dashboard: Pemain)
-// - "trivia" & "garuda" come from /api/quiz-items (admin dashboard: Soal Trivia & Garuda Call)
-// The static QUESTIONS array has been intentionally emptied — see questions.ts for the
-// fetch pipeline. BACKGROUNDS are still bundled so the stadium/jersey/trophy visuals keep
-// working even before the admin uploads a custom background.
-export type Category = "guess" | "history" | "trivia" | "garuda";
+// All question content is admin-managed via /api/quiz-items (per category, CSV import supported).
+// "trivia" key = Madura United (renamed; key kept so existing data/links keep working).
+export type Category = "trivia" | "garuda" | "liga" | "bali" | "persebaya" | "persib" | "persija";
 
 export type Question = {
   id: string;
   category: Category;
   prompt: string;
-  image?: string; // used for "guess", "trivia", optionally "garuda"
+  image?: string;
   options: string[];
   answerIndex: number;
   explanation?: string;
 };
 
+// Order used in the category grid and admin tabs.
+export const QUIZ_CATEGORY_KEYS: Category[] = ["liga", "bali", "trivia", "garuda", "persebaya", "persib", "persija"];
+
 export const CATEGORY_LABEL: Record<Category | "all", string> = {
   all: "Semua Kategori",
-  guess: "Tebak Pemain",
-  history: "Sejarah Pemain",
-  trivia: "Trivia Klub",
+  liga: "Liga Indonesia",
+  bali: "Bali United",
+  trivia: "Madura United",
   garuda: "Garuda Call",
+  persebaya: "Persebaya",
+  persib: "Persib Bandung",
+  persija: "Persija",
 };
 
 export const CATEGORY_DESC: Record<Category | "all", string> = {
   all: "Campuran semua jenis pertanyaan",
-  guess: "Tebak nama pemain dari foto",
-  history: "Dari klub mana pemain ini berasal?",
+  liga: "Tebak klub & sejarah Liga Indonesia",
+  bali: "Kuis seputar Serdadu Tridatu",
   trivia: "Tebak gambar seputar klub Laskar Sape Kerap",
   garuda: "Tebak pemain Timnas Indonesia (Garuda)",
+  persebaya: "Kuis seputar klub Bajul Ijo",
+  persib: "Kuis seputar Pangeran Biru",
+  persija: "Tantangan kuis tim Macan Kemayoran",
+};
+
+// Club accent colours — brand colours, identical in every theme.
+export const CATEGORY_COLOR: Record<Category | "all", string> = {
+  all: "#E31B23",
+  liga: "#C9A44C",
+  bali: "#D7262E",
+  trivia: "#E0262B",
+  garuda: "#E0A526",
+  persebaya: "#22A24A",
+  persib: "#2D6BEA",
+  persija: "#F0302A",
 };
 
 // Stable background images used by the hero + quiz backdrops.

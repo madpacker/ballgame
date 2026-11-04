@@ -1,39 +1,55 @@
-import { View, Text, Pressable, StyleSheet, ScrollView, Platform } from "react-native";
-import { useRouter } from "expo-router";
+import { View, Text, Pressable, StyleSheet, ScrollView, Platform, ImageBackground } from "react-native";
+import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@react-native-vector-icons/ionicons";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import * as Haptics from "expo-haptics";
 
 import { api } from "@/src/api";
-import { colors, radius, spacing } from "@/src/theme";
+import { spacing, radius } from "@/src/theme";
 import { useAuth } from "@/src/contexts/auth";
-import { useSkin } from "@/src/contexts/skin";
-import { BACKGROUNDS } from "@/src/data/quiz";
-import { getLocalHigh, type LocalHigh } from "@/src/storage/localHigh";
 import { absoluteFileUrl, useAppSettings } from "@/src/hooks/useAppSettings";
+import { HOME_ART } from "@/src/data/homeArt";
+import BottomNav from "@/src/components/BottomNav";
+
+// Game-lobby palette: a fixed night-stadium look that stays identical in every theme.
+const L = {
+  night: "#071637",
+  white: "#FFFFFF",
+  silver: "#DCE6FF",
+  muted: "#A9B6D8",
+  cyan: "#3FD0FF",
+  xp: "#36D1A6",
+  gold: "#FFC23A",
+  orange: "#FF7A1A",
+  purple: "#C2187A",
+  glass: "rgba(10,22,52,0.78)",
+  red: "#E31B23",
+};
+
+type Streaker = { user_id: string; name: string; picture?: string | null; current_streak: number };
+type Xp = { xp: number; level: number; level_xp: number; level_size: number };
 
 export default function Home() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
-  const { accent } = useSkin();
   const { settings } = useAppSettings();
   const customBg = absoluteFileUrl(settings.background_url);
-  const [high, setHigh] = useState<LocalHigh>({ classic: 0, time_attack: 0 });
   const [unread, setUnread] = useState(0);
   const [theme, setTheme] = useState<{ title: string; subtitle: string; accent: string; id: string } | null>(null);
-  const [topStreaks, setTopStreaks] = useState<{ user_id: string; name: string; picture?: string | null; current_streak: number }[]>([]);
+  const [topStreaks, setTopStreaks] = useState<Streaker[]>([]);
   const [live, setLive] = useState<{ live: boolean; match?: any; minute?: number; multiplier?: number } | null>(null);
+  const [xp, setXp] = useState<Xp | null>(null);
+  const tourOn = !!settings.tournament_enabled;
 
   useEffect(() => {
-    getLocalHigh().then(setHigh);
     api<{ title: string; subtitle: string; accent: string; id: string }>("/weekly-theme")
       .then(setTheme)
       .catch(() => setTheme(null));
-    api<{ user_id: string; name: string; picture?: string | null; current_streak: number }[]>("/top-streaks?limit=5")
+    api<Streaker[]>("/top-streaks?limit=5")
       .then(setTopStreaks)
       .catch(() => setTopStreaks([]));
     const refreshLive = () =>
@@ -44,6 +60,17 @@ export default function Home() {
     const id = setInterval(refreshLive, 60000);
     return () => clearInterval(id);
   }, []);
+
+  // XP refreshes every time the lobby is shown (e.g. right after finishing a game).
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) {
+        setXp(null);
+        return;
+      }
+      api<Xp>("/me/xp").then(setXp).catch(() => setXp(null));
+    }, [user]),
+  );
 
   useEffect(() => {
     if (!user) {
@@ -63,336 +90,322 @@ export default function Home() {
     };
   }, [user]);
 
-  const go = (mode: "classic" | "time_attack") => {
+  const tap = () => {
     if (Platform.OS !== "web") Haptics.selectionAsync();
+  };
+  const go = (mode: "classic" | "time_attack") => {
+    tap();
     router.push({ pathname: "/category", params: { mode } });
   };
 
+  const pct = xp ? Math.min(1, xp.level_xp / xp.level_size) : 0;
+
   return (
-    <View style={styles.container}>
-      <View style={[styles.hero, { paddingTop: insets.top + spacing.md }]}>
-        <Image source={customBg || BACKGROUNDS.stadium} style={StyleSheet.absoluteFill} contentFit="cover" />
-        <LinearGradient
-          colors={["rgba(15,17,21,0.55)", "rgba(15,17,21,0.95)", colors.surface]}
-          style={StyleSheet.absoluteFill}
-        />
-        <View style={styles.topBar}>
-          <View style={styles.brandRow}>
-            <View style={styles.logoBadge}>
-              <Image
-                source={require("@/assets/images/icon.png")}
-                style={styles.logoImg}
-                contentFit="cover"
-              />
-            </View>
-            <View>
-              <Text style={styles.brandTitle}>CAK MAD QUIZ</Text>
-              <Text style={styles.brandSub}>Laskar Sape Kerap Fan Game</Text>
+    <ImageBackground
+      source={customBg ? { uri: customBg } : require("@/assets/bg/stadium.jpg")}
+      style={styles.container}
+      resizeMode="cover"
+    >
+      <LinearGradient
+        colors={["rgba(10,40,110,0.55)", "rgba(7,22,55,0.82)", "rgba(7,22,55,0.97)"]}
+        locations={[0, 0.45, 1]}
+        style={StyleSheet.absoluteFill}
+      />
+      <LinearGradient colors={["rgba(120,190,255,0.40)", "rgba(120,190,255,0)"]} style={styles.floodlight} pointerEvents="none" />
+
+      {/* ---------- Top bar ---------- */}
+      <View style={[styles.topBar, { paddingTop: insets.top + spacing.sm }]}>
+        <Pressable
+          testID="profile-button"
+          onPress={() => router.push(user ? "/profile" : "/login")}
+          style={styles.profilePill}
+        >
+          <View style={styles.avatarRing}>
+            {user?.picture ? (
+              <Image source={user.picture} style={styles.avatar} />
+            ) : (
+              <Ionicons name="person" size={26} color={L.white} />
+            )}
+            <View style={styles.lvBadge}>
+              <Text style={styles.lvBadgeTxt}>{xp?.level ?? 1}</Text>
             </View>
           </View>
-          <View style={styles.topRight}>
-            {user && (
-              <Pressable
-                testID="notifications-button"
-                onPress={() => router.push("/notifications")}
-                hitSlop={10}
-                style={styles.bellBtn}
-              >
-                <Ionicons name="notifications" size={24} color={colors.onSurface} />
-                {unread > 0 && (
-                  <View style={styles.bellBadge}>
-                    <Text style={styles.bellBadgeTxt}>{unread > 9 ? "9+" : unread}</Text>
-                  </View>
-                )}
-              </Pressable>
-            )}
-            <Pressable
-              testID="profile-button"
-              onPress={() => router.push("/profile")}
-              style={styles.profileBtn}
-              hitSlop={10}
-            >
-              {user?.picture ? (
-                <Image source={user.picture} style={styles.avatar} />
-              ) : (
-                <Ionicons name="person-circle-outline" size={32} color={colors.onSurface} />
+          <View style={{ flex: 1 }}>
+            <Text numberOfLines={1} style={styles.playerName}>
+              {user ? user.name.toUpperCase() : "TAMU · MASUK"}
+            </Text>
+            <View style={styles.lvRow}>
+              <Text style={styles.lvTxt}>LEVEL {xp?.level ?? 1}</Text>
+              <Text testID="xp-text" style={styles.xpNum}>
+                {xp ? `${xp.level_xp} / ${xp.level_size}` : "0 / 500"}
+              </Text>
+            </View>
+            <View style={styles.xpRow}>
+              <Text style={styles.xpLbl}>XP</Text>
+              <View style={styles.xpTrack}>
+                <View style={[styles.xpFill, { width: `${pct * 100}%` }]} />
+              </View>
+            </View>
+          </View>
+        </Pressable>
+        <View style={styles.topRight}>
+          {user && (
+            <Pressable testID="notifications-button" onPress={() => router.push("/notifications")} style={styles.squareBtn}>
+              <Ionicons name="notifications" size={22} color={L.silver} />
+              {unread > 0 && (
+                <View style={styles.bellBadge}>
+                  <Text style={styles.bellBadgeTxt}>{unread > 9 ? "9+" : unread}</Text>
+                </View>
               )}
             </Pressable>
-          </View>
-        </View>
-
-        <View style={styles.highCard}>
-          <Text style={styles.highLabel}>SKOR TERTINGGI LOKAL</Text>
-          <View style={styles.highRow}>
-            <View style={styles.highBox}>
-              <Text style={styles.highTag}>Classic</Text>
-              <Text style={styles.highValue}>{high.classic}</Text>
-            </View>
-            <View style={styles.highDivider} />
-            <View style={styles.highBox}>
-              <Text style={styles.highTag}>Time Attack</Text>
-              <Text style={styles.highValue}>{high.time_attack}</Text>
-            </View>
-          </View>
+          )}
+          <Pressable testID="settings-button" onPress={() => router.push("/settings")} style={styles.squareBtn}>
+            <Ionicons name="settings-sharp" size={24} color={L.silver} />
+          </Pressable>
         </View>
       </View>
 
-      <ScrollView
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: insets.bottom + spacing.xl },
-        ]}
-        showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.sectionTitle}>PILIH MODE PERTANDINGAN</Text>
-
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {live?.live && live.match && (
-          <Pressable
-            testID="live-boost-banner"
-            onPress={() => router.push("/matches")}
-            style={({ pressed }) => [styles.liveBanner, pressed && { opacity: 0.9 }]}
-          >
+          <Pressable testID="live-boost-banner" onPress={() => router.push("/matches")} style={styles.liveBanner}>
             <View style={styles.liveDot} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.liveTag}>LIVE · MENIT {live.minute}&apos;</Text>
-              <Text style={styles.liveTitle}>
-                {live.match.home ? "MU vs " + live.match.opponent : live.match.opponent + " vs MU"}
-              </Text>
-              <Text style={styles.liveSub}>⚡ Semua skor quiz dapat {live.multiplier}X bonus!</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={22} color={colors.onBrandPrimary} />
+            <Text numberOfLines={1} style={styles.liveTxt}>
+              LIVE {live.minute}&apos; · {live.match.home ? "MU vs " + live.match.opponent : live.match.opponent + " vs MU"} · {live.multiplier}X bonus
+            </Text>
+            <Ionicons name="chevron-forward" size={18} color={L.white} />
           </Pressable>
         )}
-
         {theme && (
           <Pressable
             testID="weekly-theme-banner"
             onPress={() => router.push({ pathname: "/category", params: { mode: "classic", theme: theme.id } })}
-            style={({ pressed }) => [
-              styles.themeBanner,
-              { borderColor: theme.accent, backgroundColor: theme.accent + "22" },
-              pressed && { opacity: 0.85 },
-            ]}
+            style={[styles.themeBanner, { borderColor: theme.accent }]}
           >
-            <View style={[styles.themeIcon, { backgroundColor: theme.accent }]}>
-              <Ionicons name="flame" size={22} color={colors.onBrandPrimary} />
-            </View>
+            <Ionicons name="flame" size={18} color={theme.accent} />
             <View style={{ flex: 1 }}>
               <Text style={styles.themeTag}>CHALLENGE MINGGU INI</Text>
-              <Text style={styles.themeTitle}>{theme.title}</Text>
-              <Text style={styles.themeSub}>{theme.subtitle}</Text>
+              <Text numberOfLines={1} style={styles.themeTitle}>{theme.title}</Text>
             </View>
-            <Ionicons name="chevron-forward" size={22} color={colors.muted} />
+            <Ionicons name="chevron-forward" size={18} color={L.muted} />
           </Pressable>
         )}
 
-        {user && (user.current_streak ?? 0) > 0 && (
-          <View style={styles.streakCard}>
-            <View style={styles.streakIcon}>
-              <Text style={{ fontSize: 20 }}>🔥</Text>
+        {/* ---------- Bento grid ---------- */}
+        <View style={styles.bento}>
+          {/* Left column */}
+          <View style={styles.col}>
+            <View testID="hero-mascot" style={styles.mascot}>
+              {HOME_ART.mascot ? (
+                <Image source={HOME_ART.mascot} style={StyleSheet.absoluteFill} contentFit="contain" />
+              ) : (
+                <View style={styles.mascotPh}>
+                  <Ionicons name="body" size={120} color="rgba(255,255,255,0.88)" />
+                  <View style={styles.goldBall}>
+                    <Ionicons name="football" size={44} color={L.gold} />
+                  </View>
+                </View>
+              )}
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.streakLabel}>STREAK HARIAN</Text>
-              <Text style={styles.streakValue}>{user.current_streak} hari berturut</Text>
-            </View>
-            <View style={styles.streakRight}>
-              <Text style={styles.streakBest}>Rekor: {user.best_streak ?? 0}</Text>
-              {(user.current_streak ?? 0) >= 7 ? (
-                <Text style={styles.streakBonus}>+150 bonus</Text>
-              ) : (user.current_streak ?? 0) >= 3 ? (
-                <Text style={styles.streakBonus}>+75 bonus</Text>
-              ) : (user.current_streak ?? 0) >= 2 ? (
-                <Text style={styles.streakBonus}>+25 bonus</Text>
-              ) : null}
-            </View>
-          </View>
-        )}
 
-        <Pressable
-          testID="mode-classic-button"
-          onPress={() => go("classic")}
-          style={({ pressed }) => [styles.modeCard, pressed && styles.cardPressed]}
-        >
-          <View style={[styles.modeIcon, { backgroundColor: accent.primary }]}>
-            <Ionicons name="trophy" size={28} color={accent.onPrimary} />
-          </View>
-          <View style={styles.modeInfo}>
-            <Text style={styles.modeTitle}>MODE CLASSIC</Text>
-            <Text style={styles.modeDesc}>10 soal · poin akurasi · ritme santai</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={22} color={colors.muted} />
-        </Pressable>
-
-        <Pressable
-          testID="mode-time-attack-button"
-          onPress={() => go("time_attack")}
-          style={({ pressed }) => [styles.modeCard, pressed && styles.cardPressed]}
-        >
-          <View style={[styles.modeIcon, { backgroundColor: accent.secondary }]}>
-            <Ionicons name="timer" size={28} color={colors.onBrandSecondary} />
-          </View>
-          <View style={styles.modeInfo}>
-            <Text style={styles.modeTitle}>TIME ATTACK</Text>
-            <Text style={styles.modeDesc}>60 detik · jawab sebanyak mungkin</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={22} color={colors.muted} />
-        </Pressable>
-
-        <Pressable
-          testID="mode-tournament-button"
-          onPress={() => {
-            if (Platform.OS !== "web") Haptics.selectionAsync();
-            router.push("/tournament");
-          }}
-          style={({ pressed }) => [
-            styles.modeCard,
-            { borderColor: colors.brandSecondary },
-            !settings.tournament_enabled && { opacity: 0.6 },
-            pressed && styles.cardPressed,
-          ]}
-        >
-          <View style={[styles.modeIcon, { backgroundColor: colors.brandSecondary }]}>
-            <Ionicons
-              name={settings.tournament_enabled ? "medal" : "lock-closed"}
-              size={28}
-              color={colors.onBrandSecondary}
-            />
-          </View>
-          <View style={styles.modeInfo}>
-            <Text style={styles.modeTitle}>TOURNAMENT</Text>
-            <Text style={styles.modeDesc}>
-              {settings.tournament_enabled
-                ? "Classic · Time Attack · Royal — rebut puncak klasemen!"
-                : "Terkunci · Tournament belum dibuka admin"}
-            </Text>
-          </View>
-          <Ionicons
-            name={settings.tournament_enabled ? "chevron-forward" : "lock-closed"}
-            size={20}
-            color={colors.muted}
-          />
-        </Pressable>
-
-        <View style={styles.quickRow}>
-          <Pressable
-            testID="news-shortcut"
-            onPress={() => router.push("/news")}
-            style={styles.quickBtn}
-          >
-            <Ionicons name="newspaper" size={22} color={colors.brandSecondary} />
-            <Text style={styles.quickTxt}>Berita</Text>
-          </Pressable>
-          <Pressable
-            testID="matches-shortcut"
-            onPress={() => router.push("/matches")}
-            style={styles.quickBtn}
-          >
-            <Ionicons name="football" size={22} color={colors.brandSecondary} />
-            <Text style={styles.quickTxt}>Prediksi</Text>
-          </Pressable>
-          <Pressable
-            testID="leaderboard-shortcut"
-            onPress={() => router.push("/leaderboard")}
-            style={styles.quickBtn}
-          >
-            <Ionicons name="podium" size={22} color={colors.brandSecondary} />
-            <Text style={styles.quickTxt}>Peringkat</Text>
-          </Pressable>
-          <Pressable
-            testID="profile-shortcut"
-            onPress={() => router.push("/profile")}
-            style={styles.quickBtn}
-          >
-            <Ionicons name="person" size={22} color={colors.brandSecondary} />
-            <Text style={styles.quickTxt}>{user ? "Profil" : "Masuk"}</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.infoCard}>
-          <Text style={styles.infoTitle}>Tentang Game</Text>
-          <Text style={styles.infoBody}>
-            Uji seberapa dalam kamu mengenal Madura United. Tebak foto pemain, lacak
-            sejarah klub mereka, dan jawab trivia seputar Laskar Sape Kerap.
-          </Text>
-        </View>
-
-        {topStreaks.length > 0 && (
-          <View style={styles.streakBoardCard}>
-            <View style={styles.streakBoardHeader}>
-              <Text style={styles.streakBoardTitle}>🔥 JUARA STREAK HARI INI</Text>
-              <Text style={styles.streakBoardSub}>Siapa paling rajin main?</Text>
-            </View>
-            {topStreaks.slice(0, 5).map((u, i) => (
-              <View key={u.user_id} style={styles.streakRow}>
-                <Text style={[styles.streakRank, i === 0 && { color: colors.brandSecondary }]}>
-                  {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`}
+            <Pressable
+              testID="mode-tournament-button"
+              onPress={() => {
+                tap();
+                router.push("/tournament");
+              }}
+              style={({ pressed }) => [styles.card, styles.tourCard, pressed && styles.pressed]}
+            >
+              <LinearGradient colors={["#7A0F5C", "#3A0A3E", "#1B0830"]} style={StyleSheet.absoluteFill} />
+              <Text numberOfLines={1} style={[styles.cardTitle, { fontSize: 17 }]}>TOURNAMENT</Text>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardSub}>
+                  {tourOn ? "Dibuka · Classic · Time Attack · Royal" : "Terkunci • Tournament belum dibuka admin"}
                 </Text>
-                {u.picture ? (
-                  <Image source={u.picture} style={styles.streakAvatar} />
+                <Ionicons name="play-forward" size={22} color="#FF6FB5" />
+              </View>
+              <View style={styles.tourArt}>
+                {HOME_ART.tournament ? (
+                  <Image source={HOME_ART.tournament} style={StyleSheet.absoluteFill} contentFit="contain" />
                 ) : (
-                  <View style={[styles.streakAvatar, styles.streakAvatarFallback]}>
-                    <Ionicons name="person" size={16} color={colors.onSurface} />
+                  <View style={styles.trophyGlow}>
+                    <Ionicons name="trophy" size={64} color={L.gold} />
+                    {!tourOn && (
+                      <View style={styles.lockChip}>
+                        <Ionicons name="lock-closed" size={20} color={L.white} />
+                      </View>
+                    )}
                   </View>
                 )}
-                <Text numberOfLines={1} style={styles.streakName}>{u.name}</Text>
-                <View style={styles.streakDaysPill}>
-                  <Text style={styles.streakDaysTxt}>{u.current_streak}🔥</Text>
+              </View>
+              <Text style={styles.tourAboutTitle}>Tentang Turnamen</Text>
+              <Text style={styles.tourAbout}>
+                Bersainglah dengan ribuan pemain lain di panggung turnamen bergengsi. Jawab kuis secepat dan setepat
+                mungkin, panjat papan peringkat, dan rebut trofi juara serta hadiah eksklusif!
+              </Text>
+            </Pressable>
+
+            <View testID="about-card" style={[styles.card, styles.aboutCard]}>
+              <Text style={styles.aboutTitle}>Tentang Game</Text>
+              <Text style={styles.aboutBody}>
+                UJI KEMAMPUAN KALIAN SEBERAPA TAHU TENTANG LIGA INDONESIA DAN TIMNAS
+              </Text>
+            </View>
+          </View>
+
+          {/* Right column */}
+          <View style={styles.col}>
+            <Pressable
+              testID="mode-time-attack-button"
+              onPress={() => go("time_attack")}
+              style={({ pressed }) => [styles.card, styles.taCard, pressed && styles.pressed]}
+            >
+              <LinearGradient colors={["#0E4E7A", "#0A2B57", "#0B1C40"]} style={StyleSheet.absoluteFill} />
+              <Text numberOfLines={1} adjustsFontSizeToFit style={styles.cardTitle}>TIME ATTACK</Text>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardSub}>Jump into action and answer as fast as possible!</Text>
+                <Ionicons name="play-forward" size={22} color={L.cyan} />
+              </View>
+              <View style={styles.taArt}>
+                {HOME_ART.timeAttack ? (
+                  <Image source={HOME_ART.timeAttack} style={StyleSheet.absoluteFill} contentFit="cover" />
+                ) : (
+                  <View style={styles.taPh}>
+                    <Ionicons name="walk" size={56} color="rgba(255,255,255,0.75)" />
+                    <Ionicons name="timer" size={64} color={L.cyan} />
+                    <Ionicons name="walk" size={56} color="rgba(255,255,255,0.75)" />
+                  </View>
+                )}
+              </View>
+              <View style={styles.rowBetween}>
+                <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.cardTitle, { fontSize: 15, flex: 1 }]}>TIME ATTACK</Text>
+                <Ionicons name="play-forward" size={20} color={L.cyan} />
+              </View>
+              <Text style={styles.cardSub}>60 detik • jawab sebanyak mungkin</Text>
+            </Pressable>
+
+            <Pressable
+              testID="mode-classic-button"
+              onPress={() => go("classic")}
+              style={({ pressed }) => [styles.card, styles.classicCard, pressed && styles.pressed]}
+            >
+              <LinearGradient colors={["#4A3A0A", "#3A1C06", "#6A1E05"]} style={StyleSheet.absoluteFill} />
+              <Text style={[styles.cardTitle, { textAlign: "right" }]}>MODE{"\n"}CLASSIC</Text>
+              <View style={styles.classicRow}>
+                <View style={styles.classicArt}>
+                  {HOME_ART.classic ? (
+                    <Image source={HOME_ART.classic} style={StyleSheet.absoluteFill} contentFit="contain" />
+                  ) : (
+                    <Ionicons name="trophy" size={58} color={L.gold} style={styles.goldGlowIcon} />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.classicSubTitle}>Mode Classic</Text>
+                  <Text style={styles.classicInfo}>- 10 soal • poin akurasi • ritme santai</Text>
                 </View>
               </View>
-            ))}
+              <LinearGradient colors={["rgba(255,122,26,0)", "rgba(255,90,0,0.55)"]} style={styles.fire} pointerEvents="none" />
+            </Pressable>
+
+            <Pressable
+              testID="streak-champions-card"
+              onPress={() => router.push("/leaderboard")}
+              style={({ pressed }) => [styles.card, styles.streakCard, pressed && styles.pressed]}
+            >
+              <LinearGradient colors={["#5A1A08", "#3A0E06", "#7A2A05"]} style={StyleSheet.absoluteFill} />
+              <Text style={[styles.cardTitle, { fontSize: 16 }]}>JUARA STREAK HARI INI</Text>
+              <Text style={styles.cardSub}>Siapa paling rajin main?</Text>
+              <View style={styles.streakRow}>
+                <Ionicons name="play-forward" size={24} color={L.gold} />
+                <View style={styles.avatars}>
+                  {topStreaks.length === 0 ? (
+                    <Text style={styles.cardSub}>Belum ada streak</Text>
+                  ) : (
+                    topStreaks.slice(0, 3).map((u, i) => (
+                      <View
+                        key={u.user_id}
+                        style={[styles.miniCard, i === 0 && styles.miniCardTop, { marginLeft: i === 0 ? 0 : -10, zIndex: 3 - i }]}
+                      >
+                        {u.picture ? (
+                          <Image source={u.picture} style={styles.miniImg} />
+                        ) : (
+                          <Ionicons name="person" size={20} color={L.white} />
+                        )}
+                        <Text style={styles.miniDays}>{u.current_streak}🔥</Text>
+                      </View>
+                    ))
+                  )}
+                </View>
+              </View>
+            </Pressable>
           </View>
-        )}
+        </View>
       </ScrollView>
-    </View>
+
+      <BottomNav onPlay={() => go("classic")} />
+    </ImageBackground>
   );
 }
 
+const glow = (c: string) => ({ shadowColor: c, shadowOpacity: 0.8, shadowRadius: 12, shadowOffset: { width: 0, height: 0 }, elevation: 8 });
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.surface },
-  hero: {
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xl,
-    overflow: "hidden",
-  },
-  topBar: {
+  container: { flex: 1, backgroundColor: L.night },
+  floodlight: { position: "absolute", top: 0, left: 0, right: 0, height: 260 },
+  topBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.md, paddingBottom: spacing.sm, gap: spacing.sm },
+  profilePill: {
+    flex: 1,
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: spacing.xl,
+    gap: spacing.sm,
+    backgroundColor: L.glass,
+    borderRadius: radius.lg,
+    padding: 6,
+    paddingRight: spacing.md,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
   },
-  brandRow: { flexDirection: "row", alignItems: "center", gap: spacing.md as number },
-  logoBadge: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    overflow: "hidden",
+  avatarRing: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     borderWidth: 2,
-    borderColor: colors.brandSecondary,
-  },
-  logoText: {
-    color: colors.onBrandPrimary,
-    fontWeight: "900",
-    fontSize: 16,
-    letterSpacing: 1,
-  },
-  logoImg: { width: 64, height: 64 },
-  brandTitle: {
-    color: colors.onSurface,
-    fontWeight: "900",
-    fontSize: 18,
-    letterSpacing: 2,
-  },
-  brandSub: { color: colors.muted, fontSize: 11, marginTop: 2, letterSpacing: 0.5 },
-  profileBtn: {
-    width: 40,
-    height: 40,
+    borderColor: L.gold,
+    backgroundColor: "#1B2B55",
     alignItems: "center",
     justifyContent: "center",
   },
-  topRight: { flexDirection: "row", alignItems: "center", gap: spacing.xs as number },
-  bellBtn: {
-    width: 40,
-    height: 40,
+  avatar: { width: 48, height: 48, borderRadius: 24 },
+  lvBadge: {
+    position: "absolute",
+    bottom: -4,
+    right: -4,
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "#0B1C40",
+    borderWidth: 1.5,
+    borderColor: L.gold,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+  lvBadgeTxt: { color: L.white, fontSize: 10, fontWeight: "900" },
+  playerName: { color: L.white, fontSize: 17, fontWeight: "900", letterSpacing: 0.5 },
+  lvRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 1 },
+  lvTxt: { color: L.xp, fontSize: 11, fontWeight: "900" },
+  xpNum: { color: L.white, fontSize: 11, fontWeight: "800" },
+  xpRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3 },
+  xpLbl: { color: L.xp, fontSize: 10, fontWeight: "900" },
+  xpTrack: { flex: 1, height: 7, borderRadius: 4, backgroundColor: "rgba(255,255,255,0.15)", overflow: "hidden" },
+  xpFill: { height: "100%", backgroundColor: L.xp, borderRadius: 4 },
+  topRight: { flexDirection: "row", gap: spacing.sm },
+  squareBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
+    backgroundColor: L.glass,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -400,189 +413,127 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 4,
     right: 4,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    paddingHorizontal: 4,
-    backgroundColor: colors.brandPrimary,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: L.red,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1.5,
-    borderColor: colors.surface,
+    paddingHorizontal: 3,
   },
-  bellBadgeTxt: { color: colors.onBrandPrimary, fontSize: 10, fontWeight: "900" },
-  avatar: { width: 36, height: 36, borderRadius: 18 },
-  themeBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md as number,
-    padding: spacing.md,
-    borderRadius: radius.lg,
-    borderWidth: 1.5,
-  },
-  themeIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  themeTag: { color: colors.muted, fontSize: 10, letterSpacing: 2, fontWeight: "800" },
-  themeTitle: { color: colors.onSurface, fontWeight: "900", fontSize: 16, letterSpacing: 0.5, marginTop: 2 },
-  themeSub: { color: colors.muted, fontSize: 12, marginTop: 2 },
-  streakCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md as number,
-    padding: spacing.md,
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  streakIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.md,
-    backgroundColor: colors.brandTertiary,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  streakLabel: { color: colors.muted, fontSize: 10, letterSpacing: 2, fontWeight: "800" },
-  streakValue: { color: colors.onSurface, fontWeight: "900", fontSize: 15, marginTop: 2 },
-  streakRight: { alignItems: "flex-end" },
-  streakBest: { color: colors.muted, fontSize: 11 },
-  streakBonus: { color: colors.brandSecondary, fontWeight: "900", fontSize: 12, marginTop: 2 },
-  highCard: {
-    backgroundColor: "rgba(28,31,38,0.85)",
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.lg,
-  },
-  highLabel: {
-    color: colors.muted,
-    fontSize: 11,
-    letterSpacing: 2,
-    fontWeight: "700",
-    marginBottom: spacing.md,
-  },
-  highRow: { flexDirection: "row", alignItems: "center" },
-  highBox: { flex: 1 },
-  highDivider: { width: 1, height: 40, backgroundColor: colors.border, marginHorizontal: spacing.md },
-  highTag: { color: colors.onSurfaceSecondary, fontSize: 12, marginBottom: spacing.xs },
-  highValue: {
-    color: colors.brandSecondary,
-    fontSize: 40,
-    fontWeight: "900",
-    letterSpacing: 2,
-  },
-  content: { padding: spacing.lg, gap: spacing.md as number },
-  sectionTitle: {
-    color: colors.muted,
-    fontSize: 12,
-    letterSpacing: 2,
-    fontWeight: "800",
-    marginBottom: spacing.sm,
-  },
-  modeCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.surfaceSecondary,
-    padding: spacing.lg,
-    borderRadius: radius.lg,
-    gap: spacing.md as number,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  cardPressed: { opacity: 0.75, transform: [{ scale: 0.98 }] },
-  modeIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: radius.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  modeInfo: { flex: 1 },
-  modeTitle: {
-    color: colors.onSurface,
-    fontWeight: "900",
-    fontSize: 16,
-    letterSpacing: 1.5,
-  },
-  modeDesc: { color: colors.muted, fontSize: 13, marginTop: 4 },
-  quickRow: { flexDirection: "row", gap: spacing.md as number, marginTop: spacing.sm },
-  quickBtn: {
-    flex: 1,
-    backgroundColor: colors.surfaceSecondary,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: spacing.md,
-    borderRadius: radius.md,
-    alignItems: "center",
-    gap: spacing.xs as number,
-  },
-  quickTxt: { color: colors.onSurface, fontSize: 13, fontWeight: "600" },
-  infoCard: {
-    marginTop: spacing.md,
-    padding: spacing.lg,
-    backgroundColor: colors.brandTertiary,
-    borderRadius: radius.lg,
-  },
-  infoTitle: {
-    color: colors.onBrandTertiary,
-    fontWeight: "800",
-    fontSize: 14,
-    marginBottom: spacing.xs,
-    letterSpacing: 1,
-  },
-  infoBody: { color: colors.onBrandTertiary, fontSize: 13, lineHeight: 19 },
-  streakBoardCard: {
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: spacing.sm as number,
-  },
-  streakBoardHeader: { marginBottom: spacing.sm },
-  streakBoardTitle: { color: colors.onSurface, fontWeight: "900", fontSize: 14, letterSpacing: 1.5 },
-  streakBoardSub: { color: colors.muted, fontSize: 11, marginTop: 2 },
-  streakRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm as number,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.divider,
-  },
-  streakRank: { color: colors.muted, fontSize: 16, fontWeight: "900", width: 32 },
-  streakAvatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surfaceTertiary },
-  streakAvatarFallback: { alignItems: "center", justifyContent: "center" },
-  streakName: { flex: 1, color: colors.onSurface, fontSize: 13, fontWeight: "600" },
-  streakDaysPill: {
-    backgroundColor: colors.brandTertiary,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-  },
-  streakDaysTxt: { color: colors.brandSecondary, fontWeight: "900", fontSize: 12 },
+  bellBadgeTxt: { color: L.white, fontSize: 9, fontWeight: "900" },
+  content: { paddingHorizontal: spacing.md, paddingBottom: spacing.lg, gap: spacing.sm },
   liveBanner: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md as number,
-    backgroundColor: colors.error,
+    gap: spacing.sm,
+    backgroundColor: L.red,
+    borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    borderRadius: radius.lg,
+    paddingVertical: spacing.sm,
   },
-  liveDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: colors.onBrandPrimary,
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: L.white },
+  liveTxt: { flex: 1, color: L.white, fontWeight: "800", fontSize: 12 },
+  themeBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: L.glass,
+    borderWidth: 1.5,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
-  liveTag: { color: colors.onBrandPrimary, fontSize: 10, letterSpacing: 2, fontWeight: "900", opacity: 0.9 },
-  liveTitle: { color: colors.onBrandPrimary, fontWeight: "900", fontSize: 15, marginTop: 2 },
-  liveSub: { color: colors.onBrandPrimary, fontSize: 12, marginTop: 2, opacity: 0.95 },
+  themeTag: { color: L.muted, fontSize: 9, fontWeight: "800", letterSpacing: 1.5 },
+  themeTitle: { color: L.white, fontSize: 13, fontWeight: "900" },
+  bento: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs },
+  col: { flex: 1, gap: spacing.sm },
+  card: { borderRadius: radius.lg, borderWidth: 2, overflow: "hidden", padding: spacing.md, gap: 4 },
+  pressed: { transform: [{ scale: 0.97 }], opacity: 0.92 },
+  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 4 },
+  cardTitle: {
+    color: L.white,
+    fontSize: 20,
+    fontWeight: "900",
+    fontStyle: "italic",
+    letterSpacing: 0,
+    textShadowColor: "rgba(0,0,0,0.6)",
+    textShadowOffset: { width: 1, height: 2 },
+    textShadowRadius: 3,
+  },
+  cardSub: { flex: 1, color: L.silver, fontSize: 11, lineHeight: 15 },
+  mascot: { height: 250, alignItems: "center", justifyContent: "flex-end" },
+  mascotPh: { alignItems: "center", justifyContent: "flex-end", flex: 1 },
+  goldBall: {
+    marginTop: -10,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,194,58,0.18)",
+    ...glow("#FFC23A"),
+  },
+  tourCard: { borderColor: "#E0479E", minHeight: 360, ...glow("#E0479E") },
+  tourArt: { height: 150, alignItems: "center", justifyContent: "center", marginVertical: spacing.sm },
+  trophyGlow: {
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,111,181,0.18)",
+    ...glow("#FF6FB5"),
+  },
+  lockChip: {
+    position: "absolute",
+    bottom: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    borderWidth: 1.5,
+    borderColor: L.gold,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tourAboutTitle: { color: L.white, fontSize: 15, fontWeight: "900" },
+  tourAbout: { color: L.silver, fontSize: 11, lineHeight: 15 },
+  aboutCard: { borderColor: "rgba(255,255,255,0.18)", backgroundColor: L.glass },
+  aboutTitle: { color: L.white, fontSize: 17, fontWeight: "900" },
+  aboutBody: { color: L.silver, fontSize: 12, lineHeight: 17 },
+  taCard: { borderColor: L.cyan, minHeight: 330, ...glow(L.cyan) },
+  taArt: { flex: 1, minHeight: 150, marginVertical: spacing.sm, borderRadius: radius.md, overflow: "hidden" },
+  taPh: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(63,208,255,0.15)",
+    borderRadius: radius.md,
+  },
+  classicCard: { borderColor: L.gold, minHeight: 200, ...glow(L.gold) },
+  classicRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.xs },
+  classicArt: { width: 72, height: 80, alignItems: "center", justifyContent: "center" },
+  goldGlowIcon: { textShadowColor: L.orange, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 16 },
+  classicSubTitle: { color: L.white, fontSize: 13, fontWeight: "900", fontStyle: "italic" },
+  classicInfo: { color: L.silver, fontSize: 11, lineHeight: 15, marginTop: 2 },
+  fire: { position: "absolute", left: 0, right: 0, bottom: 0, height: "45%" },
+  streakCard: { borderColor: L.orange, minHeight: 150, ...glow(L.orange) },
+  streakRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.sm },
+  avatars: { flexDirection: "row", alignItems: "center" },
+  miniCard: {
+    width: 42,
+    height: 56,
+    borderRadius: 8,
+    backgroundColor: "#3B2A7A",
+    borderWidth: 1.5,
+    borderColor: "#8C7BFF",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  miniCardTop: { width: 48, height: 64, borderColor: L.gold, backgroundColor: "#7A1A1A" },
+  miniImg: { width: "100%", height: "78%" },
+  miniDays: { color: L.white, fontSize: 9, fontWeight: "900" },
 });

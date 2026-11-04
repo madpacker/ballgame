@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 17 tested the match-result fix, new quiz categories, category logos, the players->trivia migration and the new /category screen. Backend: new file test_iter17_categories_results.py passed 22/22. Full regression with pytest -n 0 passed 304/304, so tournament and classic cumulative still work. Frontend E2E at 375x667 with a TEST admin session. /category renders 8 cards in the right order (all, liga, bali, trivia, garuda, persebaya, persib, persija) with the right labels. Tapping a card shows the check badge, and MULAI routes to /quiz?category=X. Empty persib/liga show 'Belum ada soal'. all/trivia/garuda load questions; the trivia photo question is shown. In /admin, a finished match with no score shows HASIL. The modal saves (3-1) and the label then changes to UBAH; correcting to 0-1 persisted. All 8 logo cells work: uploading a Persija logo through the file chooser showed it on the category card, and Hapus removed it. All 7 qi-tab chips are present, and adding a Persija question through the form worked. Found 1 HIGH bug: in a Classic game on a category with fewer than 10 questions, POST /scores returns 422 game_too_fast. No deprecated packages detected.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/scores (with quiz.tsx)", "issue": "On a Classic game in a category with fewer than 10 questions, the score is rejected with 422 'game_too_fast'. Madura United/trivia currently has 1 question, and every new category starts empty or nearly empty. The frontend ends the game after queue.length questions but still sends total=CLASSIC_COUNT (10) (quiz.tsx:111). The backend then requires total*0.8 = 8s (server.py ~line 340). Reproduced in the UI: Persija had 1 question, answered at once -> result shows BENAR 1 / SALAH 9 / 10% and 'Gagal mengirim skor. Periksa koneksi kamu.' The rejected call also uses up the game ticket.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/admin/category-logo/{category}", "issue": "Content-type/size is not checked (any bytes are accepted). Old logo objects are never deleted from storage on replace or delete."},
+      {"endpoint": "_migrate_players_to_trivia", "issue": "Only 1 of 38 players had a photo and was not deleted, so the migration created just 1 trivia item. This is correct for the data, but Madura United now has only 1 question. The 'last order_index' query also counts soft-deleted items."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "quiz.tsx header/result", "issue": "In Classic with a pool smaller than 10, the header shows Q1/10 and the game ends after 1 question. The result counts the missing questions as wrong (SALAH 9, Akurasi 10%).", "testID": "n/a", "priority": "HIGH"},
+      {"component": "admin.tsx result modal (UBAH)", "issue": "Opening UBAH pre-fills only the score. resScorerIds/resMotmId are not loaded from m.scorer_player_ids/motm_player_id, so correcting a score silently clears the scorers and MOTM and removes those bonus points from predictions on re-score.", "testID": "set-result-{match_id}", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Classic quiz on a small category -> submit score", "issue": "Shown above: /scores 422 game_too_fast, and the error message wrongly blames the connection.", "affected_testIDs": ["start-match-button"]}
+    ],
+    "design_issues": [
+      {"screen": "/category", "issues": ["The Madura United description is cut off ('Laskar Sape ...') on 375px.", "The header (title + sparks) takes about 170px, so at 667px only about 5 cards are visible above the fixed CTA."]},
+      {"screen": "/admin", "issues": ["The 'Hapus' logo link is 30x11px (about 46x27 with hitSlop), below 44px, and deletes with no confirm.", "Logo grid labels are cut off ('Semua Kate…', 'Persib Band…'); the 3-per-row grid leaves empty space on the right.", "The HASIL/UBAH button is 32px tall (hitSlop 8 helps).", "The header still says 'DATABASE PEMAIN' even though Tebak Pemain was removed.", "The result modal has no visible close/cancel button."]},
+      {"screen": "/quiz empty state", "issues": ["back-to-category does router.replace('/category') without mode, so Time Attack users land on the Classic screen."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter17_categories_results.py", "/app/backend/tests/seed_iter17_fe.py", "/app/backend/tests/check_iter17_db.py", "/app/test_reports/pytest/pytest_iter17.xml"],
+  "action_items": [
+    "HIGH: Fix Classic on small categories. Either send total=min(CLASSIC_COUNT, queue.length) from quiz.tsx and show Q{i}/{min} in the header, or block starting Classic when the pool has fewer than 10 questions. Also make sure the backend game_too_fast check (total*0.8s) does not reject honest fast short games. Show the real reason instead of 'Periksa koneksi kamu' on 422.",
+    "MEDIUM: In admin.tsx, the set-result onPress should also pre-fill setResScorerIds(m.scorer_player_ids) and setResMotmId(m.motm_player_id) so a correction keeps the scorer/MOTM bonuses.",
+    "LOW: Empty-state back button should keep the mode param. Enlarge the 'Hapus' touch target and add a confirm. Rename the admin header. Add a close button to the result modal.",
+    "LOW: Validate logo image type/size and clean up old storage objects."
+  ],
+  "critical_code_review_comments": [
+    "admin.tsx is 1917 lines and server.py is 2713 lines (>700). They should be split.",
+    "The /scores ticket is used up even when the request is rejected as game_too_fast, so the user cannot retry."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter17_categories_results.py", "/app/backend/tests/seed_iter17_fe.py", "/app/backend/tests/check_iter17_db.py"],
+  "success_rate": {"backend": "100% (304/304 incl. 22 new)", "frontend": "~90% (all requested flows work; score submit fails on small categories)"},
+  "seed_data_creation": "TEST_it17_* / TEST_fe17_admin users and sessions, match mt_TEST_fe17, TEST quiz items and the persija logo were all created and then cleaned up. category_logos is now {}. tournament_enabled stays False. 'Tos Joki' was not touched.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "FE auth: wait 3s, set localStorage 'cakmad.session_token', goto '/', wait 4s, then navigate. Use `python /app/backend/tests/seed_iter17_fe.py seed|state|cleanup` (TEST admin + finished match mt_TEST_fe17). Logo upload works in Playwright via page.expect_file_chooser on catlogo-pick-{k}. To reproduce the HIGH bug: add 1 question in persija, play Classic, answer immediately -> /scores 422 game_too_fast.",
+  "rca_of_issue": "Small-category Classic: pickDynamicQuestions returns min(10, pool) items, so the quiz ends after pool.length questions. finish() still sends total=CLASSIC_COUNT=10 (quiz.tsx:111). Backend min_secs = total*0.8 = 8s, and a 1-question game takes about 2s -> 422 game_too_fast. Mitigation: send the real total, or require at least 10 questions for Classic."
+}

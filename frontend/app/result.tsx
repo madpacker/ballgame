@@ -118,6 +118,7 @@ export default function ResultScreen() {
       .catch((e) => {
         if (String(e).includes("tournament_closed")) setSubmitErr("Tournament sedang ditutup admin. Skor tidak dihitung.");
         else if (String(e).includes("409")) setSubmitErr("Skor sesi ini sudah tercatat sebelumnya.");
+        else if (String(e).includes("game_too_fast")) setSubmitErr("Permainan terlalu cepat, skor tidak dihitung.");
         else setSubmitErr("Gagal mengirim skor. Periksa koneksi kamu.");
       })
       .finally(() => setSubmitting(false));

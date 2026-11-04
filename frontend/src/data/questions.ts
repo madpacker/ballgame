@@ -13,7 +13,7 @@ export type ApiPlayer = {
 
 export type ApiQuizItem = {
   item_id: string;
-  category: "trivia" | "garuda";
+  category: Category;
   prompt: string;
   image_url?: string | null;
   options: string[];
@@ -98,39 +98,21 @@ function pickOptions(correct: string, pool: string[], count = 4): string[] {
 }
 
 export function playersToQuestions(players: ApiPlayer[]): Question[] {
-  // Only include players admin flagged in quiz AND that have a photo for the "guess" questions.
+  // Picture questions from player photos (used only by weekly themed challenges).
   const inPool = players.filter((p) => p.included_in_quiz !== false);
   const withPhoto = inPool.filter((p) => p.photo_url);
   const names = inPool.map((p) => p.name);
-  const clubs = inPool.flatMap((p) => p.previous_clubs);
-
-  const guess: Question[] = withPhoto.map((p) => {
+  return withPhoto.map((p) => {
     const opts = pickOptions(p.name, names);
     return {
       id: `dyn-g-${p.player_id}`,
-      category: "guess" as Category,
+      category: "trivia" as Category,
       prompt: "Siapa pemain Madura United ini?",
       image: absolutePhotoUrl(p.photo_url),
       options: opts,
       answerIndex: opts.indexOf(p.name),
     };
   });
-
-  const history: Question[] = inPool
-    .filter((p) => p.previous_clubs.length > 0)
-    .map((p) => {
-      const correct = p.previous_clubs[0];
-      const opts = pickOptions(correct, clubs);
-      return {
-        id: `dyn-h-${p.player_id}`,
-        category: "history" as Category,
-        prompt: `Sebelum ke Madura United, ${p.name} pernah membela klub...`,
-        options: opts,
-        answerIndex: opts.indexOf(correct),
-      };
-    });
-
-  return [...guess, ...history];
 }
 
 export function quizItemsToQuestions(items: ApiQuizItem[]): Question[] {
@@ -152,7 +134,7 @@ export async function fetchDynamicPlayers(): Promise<ApiPlayer[]> {
   }
 }
 
-export async function fetchQuizItems(category: "trivia" | "garuda"): Promise<ApiQuizItem[]> {
+export async function fetchQuizItems(category: Category | "all"): Promise<ApiQuizItem[]> {
   try {
     return await api<ApiQuizItem[]>(`/quiz-items?category=${category}`);
   } catch {
@@ -165,39 +147,15 @@ export async function pickDynamicQuestions(
   count: number,
   theme?: ThemeFilter | null,
 ): Promise<Question[]> {
-  // Build the question pool from the admin's live content only.
-  const players = await fetchDynamicPlayers();
-  const filtered = filterPlayersByTheme(players, theme ?? null);
-  const playerQ = playersToQuestions(filtered);
-
-  const mixed = cat === "all" || cat === "tournament";
-  const needTrivia = mixed || cat === "trivia";
-  const needGaruda = mixed || cat === "garuda";
-  const [triviaItems, garudaItems] = await Promise.all([
-    needTrivia && !theme ? fetchQuizItems("trivia") : Promise.resolve([] as ApiQuizItem[]),
-    needGaruda && !theme ? fetchQuizItems("garuda") : Promise.resolve([] as ApiQuizItem[]),
-  ]);
-  const triviaQ = quizItemsToQuestions(triviaItems);
-  const garudaQ = quizItemsToQuestions(garudaItems);
-
   let pool: Question[];
   if (theme) {
-    // Themed challenges only operate on player-based questions.
-    pool = cat === "all" ? playerQ : playerQ.filter((q) => q.category === cat);
-  } else if (cat === "tournament") {
-    // Tournament mix: Tebak Pemain + Trivia Klub + Garuda Call.
-    pool = [...playerQ.filter((q) => q.category === "guess"), ...triviaQ, ...garudaQ];
-  } else if (cat === "all") {
-    pool = [...playerQ, ...triviaQ, ...garudaQ];
-  } else if (cat === "guess" || cat === "history") {
-    pool = playerQ.filter((q) => q.category === cat);
-  } else if (cat === "trivia") {
-    pool = triviaQ;
-  } else if (cat === "garuda") {
-    pool = garudaQ;
+    // Weekly themed challenges still filter Madura United player photos.
+    const players = await fetchDynamicPlayers();
+    pool = playersToQuestions(filterPlayersByTheme(players, theme));
   } else {
-    pool = [];
+    // "all" and "tournament" mix every admin category; otherwise just the chosen one.
+    const key = cat === "all" || cat === "tournament" ? "all" : cat;
+    pool = quizItemsToQuestions(await fetchQuizItems(key));
   }
-
   return shuffle(pool).slice(0, Math.min(count, pool.length));
 }

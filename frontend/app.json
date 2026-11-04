@@ -48,8 +48,7 @@
       "expo-web-browser",
       "expo-status-bar",
       "expo-sharing",
-      "@react-native-vector-icons/ionicons",
-      "expo-audio"
+      "@react-native-vector-icons/ionicons"
     ],
     "experiments": {
       "typedRoutes": true

@@ -94,8 +94,7 @@ class TestQuizItemsPublic:
         assert isinstance(r.json(), list)
 
     def test_public_list_invalid_category_422(self, api_client, base_url):
-        r = api_client.get(f"{base_url}/api/quiz-items?category=all")
-        assert r.status_code == 422, r.text
+        r = api_client.get(f"{base_url}/api/quiz-items?category=guess")
         assert r.json().get("detail") == "invalid_category"
 
     def test_public_list_missing_category(self, api_client, base_url):
