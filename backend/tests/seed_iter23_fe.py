@@ -1,0 +1,77 @@
+"""Iter23 FE seed/cleanup: TEST admin, fresh user (no outfit), dressed user (outfit), wardrobe items.
+Usage: python seed_iter23_fe.py seed|clean|state"""
+import io
+import os
+import sys
+from datetime import datetime, timezone, timedelta
+
+import pymongo
+import requests
+from dotenv import load_dotenv
+from PIL import Image, ImageDraw
+
+load_dotenv("/app/backend/.env")
+load_dotenv("/app/frontend/.env")
+BASE = os.environ["EXPO_PUBLIC_BACKEND_URL"].rstrip("/")
+db = pymongo.MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+USERS = [("TEST_it23_admin", "TEST_tok_it23_admin", True), ("TEST_it23_fresh", "TEST_tok_it23_fresh", False),
+         ("TEST_it23_dressed", "TEST_tok_it23_dressed", False)]
+IDS_FILE = "/tmp/it23_wardrobe_ids.txt"
+
+
+def png(color, shape="rect"):
+    im = Image.new("RGBA", (200, 400), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    if shape == "body":
+        d.ellipse((70, 10, 130, 70), fill=color)
+        d.rectangle((60, 75, 140, 390), fill=color)
+    else:
+        d.rectangle((20, 20, 180, 380), fill=color)
+    b = io.BytesIO()
+    im.save(b, "PNG")
+    b.seek(0)
+    return b
+
+
+def seed():
+    now = datetime.now(timezone.utc)
+    for uid, tok, adm in USERS:
+        db.users.update_one({"user_id": uid}, {"$set": {"user_id": uid, "email": f"{uid}@test.local", "name": uid,
+                            "username": uid, "is_admin": adm, "created_at": now}, "$unset": {"outfit": ""}}, upsert=True)
+        db.user_sessions.update_one({"session_token": tok}, {"$set": {"session_token": tok, "user_id": uid,
+                                    "expires_at": now + timedelta(days=1), "created_at": now}}, upsert=True)
+    h = {"Authorization": f"Bearer {USERS[0][1]}"}
+    spec = [("character", (240, 200, 160, 255), "body"), ("character", (120, 80, 50, 255), "body"),
+            ("top", (220, 20, 20, 255), "rect"), ("bottom", (250, 250, 250, 255), "rect"),
+            ("shoes", (10, 10, 10, 255), "rect")]
+    ids = []
+    for i, (k, c, s) in enumerate(spec):
+        r = requests.post(f"{BASE}/api/admin/wardrobe", headers=h, data={"kind": k, "name": f"TEST_it23_{k}{i}"},
+                          files={"image": (f"{k}{i}.png", png(c, s), "image/png")})
+        r.raise_for_status()
+        ids.append(f"{k}:{r.json()['item_id']}")
+    open(IDS_FILE, "w").write("\n".join(ids))
+    by = {}
+    for x in ids:
+        k, v = x.split(":")
+        by.setdefault(k, v)
+    db.users.update_one({"user_id": "TEST_it23_dressed"}, {"$set": {"outfit": {
+        "character_id": by["character"], "top_id": by["top"], "bottom_id": by["bottom"], "shoes_id": by["shoes"]}}})
+    print("ids", ids)
+
+
+def clean():
+    ids = [x.split(":")[1] for x in open(IDS_FILE).read().split()] if os.path.exists(IDS_FILE) else []
+    print("wardrobe", db.wardrobe_items.delete_many({"item_id": {"$in": ids}}).deleted_count)
+    for uid, _, _ in USERS:
+        for c in ("users", "user_sessions", "notifications"):
+            db[c].delete_many({"user_id": uid})
+    db.app_settings.update_one({"_key": "public"}, {"$set": {"mascot_url": None}})
+
+
+def state():
+    print(db.app_settings.find_one({"_key": "public"}, {"_id": 0, "mascot_url": 1}))
+    print(list(db.wardrobe_items.find({"deleted_at": {"$exists": False}}, {"_id": 0, "item_id": 1, "name": 1, "back_url": 1})))
+
+
+{"seed": seed, "clean": clean, "state": state}[sys.argv[1]]()

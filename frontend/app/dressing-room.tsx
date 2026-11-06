@@ -13,7 +13,7 @@ import { spacing, radius } from "@/src/theme";
 import { api, getToken } from "@/src/api";
 import { useAuth } from "@/src/contexts/auth";
 import { uploadForm } from "@/src/utils/upload";
-import { absoluteFileUrl } from "@/src/hooks/useAppSettings";
+import { absoluteFileUrl, useAppSettings } from "@/src/hooks/useAppSettings";
 import CharacterStage, { type Outfit, type WItem } from "@/src/components/CharacterStage";
 
 // Sci-fi locker palette (fixed in every theme).
@@ -33,6 +33,8 @@ export default function DressingRoom() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState<string | null>(null);
   const [back, setBack] = useState(false);
+  const [menu, setMenu] = useState<WItem | null>(null);
+  const { settings, refresh: refreshSettings } = useAppSettings();
   const rot = useSharedValue(0);
 
   const load = useCallback(() => {
@@ -94,32 +96,55 @@ export default function DressingRoom() {
     setSaving(false);
   };
 
-  const upload = async (k: WItem["kind"]) => {
+  // Pick one image and send it to an admin endpoint. `busy` marks which slot shows the spinner.
+  const sendImage = async (path: string, busy: string, fields: Record<string, string> = {}) => {
     const p = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.9 });
-    if (p.canceled || !p.assets[0]) return;
+    if (p.canceled || !p.assets[0]) return false;
     const a = p.assets[0];
-    setUploading(k);
+    setUploading(busy);
     try {
       const token = await getToken();
-      const res = await uploadForm(`${BACKEND}/api/admin/wardrobe`, {
+      const res = await uploadForm(`${BACKEND}/api${path}`, {
         headers: { Authorization: `Bearer ${token}` },
-        fields: { kind: k, name: a.fileName?.split(".")[0] || k },
-        files: { image: { uri: a.uri, name: a.fileName || `${k}.png`, mimeType: a.mimeType || "image/png" } },
+        fields: { ...fields, name: fields.name ?? (a.fileName?.split(".")[0] || "item") },
+        files: { image: { uri: a.uri, name: a.fileName || "image.png", mimeType: a.mimeType || "image/png" } },
       });
       if (!res.ok) throw new Error(await res.text());
-      load();
+      return true;
     } catch {
       notify("Upload gagal", "Gunakan PNG (latar transparan untuk pakaian).");
+      return false;
+    } finally {
+      setUploading(null);
     }
-    setUploading(null);
+  };
+
+  const upload = async (k: WItem["kind"]) => {
+    if (await sendImage("/admin/wardrobe", k, { kind: k })) load();
+  };
+
+  const uploadBack = async (it: WItem) => {
+    setMenu(null);
+    if (await sendImage(`/admin/wardrobe/${it.item_id}/back`, it.item_id)) load();
+  };
+
+  const clearBack = (it: WItem) => {
+    setMenu(null);
+    api(`/admin/wardrobe/${it.item_id}/back`, { method: "DELETE" }).then(load).catch(() => {});
   };
 
   const remove = (it: WItem) => {
+    setMenu(null);
     const go = () => api(`/admin/wardrobe/${it.item_id}`, { method: "DELETE" }).then(load).catch(() => {});
     if (Platform.OS === "web") {
       if (window.confirm(`Hapus ${it.name}?`)) go();
     } else Alert.alert("Hapus item?", it.name, [{ text: "Batal", style: "cancel" }, { text: "Hapus", style: "destructive", onPress: go }]);
   };
+
+  const uploadMascot = async () => {
+    if (await sendImage("/admin/app-settings/mascot", "mascot")) refreshSettings();
+  };
+  const clearMascot = () => api("/admin/app-settings/mascot", { method: "DELETE" }).then(refreshSettings).catch(() => {});
 
   const Slot = ({ it, k, size }: { it?: WItem; k: WItem["kind"]; size: number }) => {
     if (!it) {
@@ -139,10 +164,19 @@ export default function DressingRoom() {
       <Pressable
         testID={`slot-${k}-${it.item_id}`}
         onPress={() => pick(k, it.item_id)}
-        onLongPress={isAdmin ? () => remove(it) : undefined}
+        onLongPress={isAdmin ? () => setMenu(it) : undefined}
         style={[styles.slot, { width: size, height: size }, on && styles.slotOn]}
       >
-        <Image source={absoluteFileUrl(it.image_url)} style={styles.thumb} contentFit="contain" />
+        {uploading === it.item_id ? (
+          <ActivityIndicator color={C.white} />
+        ) : (
+          <Image source={absoluteFileUrl(it.image_url)} style={styles.thumb} contentFit="contain" />
+        )}
+        {isAdmin && it.back_url ? (
+          <View style={styles.backBadge}>
+            <Text style={styles.backBadgeTxt}>360°</Text>
+          </View>
+        ) : null}
       </Pressable>
     );
   };
@@ -197,11 +231,65 @@ export default function DressingRoom() {
             </View>
           ))}
           {isAdmin && (
+            <View style={styles.panel} testID="mascot-admin">
+              <Text style={styles.rowLbl}>MASKOT LOBI (ADMIN)</Text>
+              <View style={styles.mascotRow}>
+                <View style={[styles.slot, { width: 74, height: 74 }]}>
+                  {uploading === "mascot" ? (
+                    <ActivityIndicator color={C.white} />
+                  ) : settings.mascot_url ? (
+                    <Image source={absoluteFileUrl(settings.mascot_url)} style={styles.thumb} contentFit="contain" />
+                  ) : (
+                    <Ionicons name="body" size={34} color={C.white} />
+                  )}
+                </View>
+                <View style={{ flex: 1, gap: spacing.sm }}>
+                  <Text style={styles.mascotTxt}>Tampil di layar utama untuk pemain yang belum memilih gaya.</Text>
+                  <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                    <Pressable testID="mascot-upload" disabled={uploading !== null} onPress={uploadMascot} style={styles.adminBtn}>
+                      <Text style={styles.adminBtnTxt}>{settings.mascot_url ? "GANTI" : "UPLOAD"}</Text>
+                    </Pressable>
+                    {settings.mascot_url ? (
+                      <Pressable testID="mascot-delete" onPress={clearMascot} style={[styles.adminBtn, styles.adminBtnDanger]}>
+                        <Text style={styles.adminBtnTxt}>HAPUS</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              </View>
+            </View>
+          )}
+          {isAdmin && (
             <Text style={styles.adminHint}>
-              Admin: tekan kotak “+” untuk upload (karakter = foto seluruh badan, pakaian = PNG transparan). Tekan lama item untuk menghapus.
+              Admin: tekan kotak “+” untuk upload tampak depan (karakter = seluruh badan, pakaian = PNG transparan). Tekan lama item untuk upload tampak belakang atau menghapus. Label 360° = sudah punya tampak belakang.
             </Text>
           )}
         </ScrollView>
+      )}
+
+      {menu && (
+        <Pressable style={styles.overlay} onPress={() => setMenu(null)} testID="item-menu">
+          <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.sheetTitle}>{menu.name}</Text>
+            <Pressable testID="menu-upload-back" style={styles.sheetBtn} onPress={() => uploadBack(menu)}>
+              <Ionicons name="sync" size={18} color={C.cyan} />
+              <Text style={styles.sheetTxt}>{menu.back_url ? "Ganti tampak belakang" : "Upload tampak belakang"}</Text>
+            </Pressable>
+            {menu.back_url ? (
+              <Pressable testID="menu-clear-back" style={styles.sheetBtn} onPress={() => clearBack(menu)}>
+                <Ionicons name="close-circle" size={18} color={C.cyan} />
+                <Text style={styles.sheetTxt}>Hapus tampak belakang</Text>
+              </Pressable>
+            ) : null}
+            <Pressable testID="menu-delete" style={styles.sheetBtn} onPress={() => remove(menu)}>
+              <Ionicons name="trash" size={18} color={C.orange} />
+              <Text style={[styles.sheetTxt, { color: C.orange }]}>Hapus item</Text>
+            </Pressable>
+            <Pressable testID="menu-cancel" style={styles.sheetBtn} onPress={() => setMenu(null)}>
+              <Text style={[styles.sheetTxt, { opacity: 0.7 }]}>Batal</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
       )}
     </ImageBackground>
   );
@@ -227,5 +315,17 @@ const styles = StyleSheet.create({
   slot: { borderRadius: radius.sm, borderWidth: 2, borderColor: C.cyan, backgroundColor: C.slot, alignItems: "center", justifyContent: "center", overflow: "hidden", ...glow(C.cyan) },
   slotOn: { borderColor: C.orange, backgroundColor: "rgba(255,154,46,0.35)", ...glow(C.orange) },
   thumb: { width: "88%", height: "88%" },
+  backBadge: { position: "absolute", bottom: 2, right: 2, paddingHorizontal: 4, borderRadius: 4, backgroundColor: C.orange },
+  backBadgeTxt: { color: C.white, fontSize: 9, fontWeight: "900" },
+  mascotRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  mascotTxt: { color: "rgba(255,255,255,0.8)", fontSize: 12 },
+  adminBtn: { minHeight: 44, paddingHorizontal: spacing.md, borderRadius: radius.md, borderWidth: 1.5, borderColor: C.cyan, alignItems: "center", justifyContent: "center" },
+  adminBtnDanger: { borderColor: C.orange },
+  adminBtnTxt: { color: C.white, fontWeight: "900", fontSize: 12, letterSpacing: 1 },
+  overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" },
+  sheet: { backgroundColor: "#071a38", borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: spacing.md, paddingBottom: spacing.xl, borderTopWidth: 2, borderColor: C.cyan },
+  sheetTitle: { color: C.white, fontWeight: "900", fontSize: 15, marginBottom: spacing.sm, textAlign: "center" },
+  sheetBtn: { flexDirection: "row", alignItems: "center", gap: spacing.sm, minHeight: 48, paddingHorizontal: spacing.sm },
+  sheetTxt: { color: C.white, fontSize: 14, fontWeight: "700" },
   adminHint: { color: "rgba(255,255,255,0.7)", fontSize: 11, textAlign: "center", marginTop: spacing.md, paddingHorizontal: spacing.lg },
 });

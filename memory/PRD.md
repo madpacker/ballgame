@@ -58,3 +58,8 @@
 ## Iteration 22 (Jun 2026)
 - Retested: opening video autoplay on web, LEWATI skip, Google-only login, Dressing Room opened directly + fresh-user SAVE, small-pool Classic scoring, admin UBAH prefill. All pass.
 - Polish: close button on the admin result modal, clearer selected chips, 48px empty-state button.
+
+## Iteration 23 (Jun 2026)
+- Opening video: VideoView wrapped in absoluteFill with width/height 100% + contentFit cover (web had rendered native 1080x1920 = "zoomed"). Full-screen portrait like the user's reference frames.
+- Admin uploads lobby mascot (app_settings.mascot_url; POST/DELETE /api/admin/app-settings/mascot) from the Dressing Room admin panel; shown on Home only for users without an outfit.
+- Back-view images for wardrobe items: POST/DELETE /api/admin/wardrobe/{id}/back; long-press menu in the Dressing Room; 360° badge.

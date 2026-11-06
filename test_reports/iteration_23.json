@@ -1,0 +1,35 @@
+{
+  "summary": "Iter23. Backend: 10/10 tests pass in the new test_iter23_mascot_back.py. Mascot POST/GET/DELETE works, non-admins and guests get 401/403, and an empty image gets 400. Wardrobe back-image POST/DELETE works and GET /wardrobe shows back_url. Unknown ids get 404, non-admins are rejected, and create with back_image works. Frontend: BUG FIXED, the opening video now fits the screen. At 390x844 the <video> box is 390x844 with object-fit contain (videoWidth 1080x1920), so the whole frame shows with letterbox bars. Same result at 375x667 and 768x1024. It autoplays muted (currentTime 2.4 then 4.4s) and LEWATI goes to /login. Dressing Room as admin: the MASKOT LOBI panel uploads through the file chooser. UPLOAD changes to GANTI, a preview shows and HAPUS appears. Long-pressing an item opens item-menu with upload-back, delete and cancel; clear-back only shows once a back image exists. Uploading a back image adds a '360°' badge that stays after reload. Rotating 180° switches the character layer to the back image (…b_xxx.png). Clear-back removes the badge. Delete (after the confirm) removes the slot. Cancel and tapping the overlay both close the sheet. Non-admins see no mascot panel, no badge, no menu on long-press and no '+' icons. Home: users with no outfit see lobby-mascot inside hero-mascot. A user with a saved outfit sees their CharacterStage layers, not the mascot. Regression: back goes to '/', and SAVE shows 'Tersimpan!', goes to '/' and replaces the mascot with the character. No deprecated packages detected (expo-video is used). Cleanup: all TEST_it23 data deleted. mascot_url was reset to null, and the leftover TEST_Iter9 description/socials were reset to null/{} as requested.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/wardrobe/{item_id}/back", "issue": "Stores the image in object storage before it checks that the item exists. An unknown item_id still uploads an orphan file and then returns 404. Do the find first, then the upload."},
+      {"endpoint": "POST /api/admin/app-settings/mascot, /admin/wardrobe/{id}/back", "issue": "Replaced images are never removed from storage, and there is no check on content type (a non-image file is accepted and saved as .png)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Home (hero-mascot)", "issues": ["The 'GANTI GAYA' pill overlaps the head of the CharacterStage character at 375x667."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter23_mascot_back.py", "/app/backend/tests/seed_iter23_fe.py", "/app/test_reports/pytest/pytest_iter23.xml"],
+  "action_items": [
+    "Optional: in wardrobe_set_back, check that the item exists before _store_image so no orphan uploads are created.",
+    "Optional: move the 'GANTI GAYA' pill so it does not cover the character's head on Home."
+  ],
+  "critical_code_review_comments": [
+    "dressing-room.tsx: Slot is declared inside the component, so it is a new component type on every render and all slots remount on each state change. Hoist it or memoize it.",
+    "Back view: clothing layers without back_url fall back to the front image. This is acceptable, but when only the character has a back image the clothes still show their front.",
+    "test file must be run with -n 0 (pytest.ini enables xdist and module fixtures tear down sessions per worker)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter23_mascot_back.py", "/app/backend/tests/seed_iter23_fe.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "TEST_it23_admin/fresh/dressed users, their sessions and 5 TEST_it23 wardrobe items were created and then deleted (seed_iter23_fe.py clean). mascot_url was reset to null. The leftover TEST_Iter9 description and socials in app_settings were reset to null/{} as the main agent asked.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `python /app/backend/tests/seed_iter23_fe.py seed|state|clean`. The tokens are TEST_tok_it23_admin, TEST_tok_it23_fresh and TEST_tok_it23_dressed; set them in localStorage 'cakmad.session_token'. Click opening-skip after every goto. For long-press on web, use mouse.down, wait 900ms, then mouse.up. Image uploads use page.expect_file_chooser. Run the backend tests with `pytest tests/test_iter23_mascot_back.py -n 0`.",
+  "rca_of_issue": "Opening video zoom: on web, VideoView renders a <video> at its intrinsic 1080x1920 size unless it is given an explicit size. Wrapping it in an absoluteFill View with width/height 100% and contentFit=contain fixes it (verified with the bounding box)."
+}

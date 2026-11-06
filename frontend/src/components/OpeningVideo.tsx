@@ -35,7 +35,9 @@ export default function OpeningVideo({ onDone }: { onDone: () => void }) {
 
   return (
     <View style={styles.root} testID="opening-video">
-      <VideoView player={player} style={StyleSheet.absoluteFill} contentFit="cover" nativeControls={false} />
+      <View style={StyleSheet.absoluteFill}>
+        <VideoView player={player} style={styles.video} contentFit="cover" nativeControls={false} />
+      </View>
       <View style={[styles.bar, { top: insets.top + 12 }]}>
         <Pressable
           testID="opening-sound"
@@ -58,6 +60,8 @@ export default function OpeningVideo({ onDone }: { onDone: () => void }) {
 
 const styles = StyleSheet.create({
   root: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#000000", zIndex: 100 },
+  // Explicit size: on web the <video> otherwise renders at its native 1080x1920 and looks zoomed in.
+  video: { width: "100%", height: "100%" },
   bar: { position: "absolute", right: 16, flexDirection: "row", gap: 8 },
   btn: {
     flexDirection: "row",

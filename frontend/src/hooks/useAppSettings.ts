@@ -14,6 +14,7 @@ export type AppSettings = {
   socials: Socials;
   tournament_enabled?: boolean;
   category_logos?: Record<string, string>;
+  mascot_url?: string | null;
 };
 
 const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;

@@ -1579,6 +1579,33 @@ async def wardrobe_create(
     return _wi_out(doc)
 
 
+@api_router.post("/admin/wardrobe/{item_id}/back", response_model=WardrobeItemOut)
+async def wardrobe_set_back(item_id: str, image: UploadFile = File(...), user: dict = Depends(require_admin)):
+    if not await db.wardrobe_items.find_one({"item_id": item_id, "deleted_at": {"$exists": False}}):
+        raise HTTPException(status_code=404, detail="not_found")
+    url = await _store_image(user, image, item_id + "b")
+    if not url:
+        raise HTTPException(status_code=400, detail="empty_image")
+    doc = await db.wardrobe_items.find_one_and_update(
+        {"item_id": item_id, "deleted_at": {"$exists": False}}, {"$set": {"back_url": url}},
+        projection={"_id": 0}, return_document=True,
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    return _wi_out(doc)
+
+
+@api_router.delete("/admin/wardrobe/{item_id}/back", response_model=WardrobeItemOut)
+async def wardrobe_clear_back(item_id: str, user: dict = Depends(require_admin)):
+    doc = await db.wardrobe_items.find_one_and_update(
+        {"item_id": item_id, "deleted_at": {"$exists": False}}, {"$set": {"back_url": None}},
+        projection={"_id": 0}, return_document=True,
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="not_found")
+    return _wi_out(doc)
+
+
 @api_router.delete("/admin/wardrobe/{item_id}")
 async def wardrobe_delete(item_id: str, user: dict = Depends(require_admin)):
     r = await db.wardrobe_items.update_one({"item_id": item_id}, {"$set": {"deleted_at": datetime.now(timezone.utc)}})
@@ -1914,6 +1941,7 @@ class AppSettingsOut(BaseModel):
     socials: SocialLinks = Field(default_factory=SocialLinks)
     tournament_enabled: bool = False
     category_logos: dict = Field(default_factory=dict)
+    mascot_url: Optional[str] = None
 
 
 class AppSettingsIn(BaseModel):
@@ -1934,6 +1962,7 @@ def _settings_to_out(doc: dict) -> AppSettingsOut:
         socials=SocialLinks(**socials),
         tournament_enabled=bool(doc.get("tournament_enabled", False)),
         category_logos={k: v for k, v in (doc.get("category_logos") or {}).items() if v},
+        mascot_url=doc.get("mascot_url"),
     )
 
 
@@ -2040,6 +2069,23 @@ async def delete_background(user: dict = Depends(require_admin)):
         {"$set": {"background_url": None, "updated_at": datetime.now(timezone.utc)}},
         upsert=True,
     )
+    return _settings_to_out(await _load_app_settings())
+
+
+@api_router.post("/admin/app-settings/mascot", response_model=AppSettingsOut)
+async def upload_mascot(image: UploadFile = File(...), user: dict = Depends(require_admin)):
+    url = await _store_image(user, image, "mascot")
+    if not url:
+        raise HTTPException(status_code=400, detail="empty_image")
+    await db.app_settings.update_one(
+        {"_key": "public"}, {"$set": {"_key": "public", "mascot_url": url, "updated_at": datetime.now(timezone.utc)}}, upsert=True
+    )
+    return _settings_to_out(await _load_app_settings())
+
+
+@api_router.delete("/admin/app-settings/mascot", response_model=AppSettingsOut)
+async def delete_mascot(user: dict = Depends(require_admin)):
+    await db.app_settings.update_one({"_key": "public"}, {"$set": {"mascot_url": None}}, upsert=True)
     return _settings_to_out(await _load_app_settings())
 
 

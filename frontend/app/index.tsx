@@ -203,6 +203,8 @@ export default function Home() {
             <Pressable testID="hero-mascot" onPress={() => router.push("/dressing-room")} style={styles.mascot}>
               {outfit.character_id ? (
                 <CharacterStage items={wardrobe} outfit={outfit} />
+              ) : settings.mascot_url ? (
+                <Image testID="lobby-mascot" source={absoluteFileUrl(settings.mascot_url)} style={StyleSheet.absoluteFill} contentFit="contain" />
               ) : HOME_ART.mascot ? (
                 <Image source={HOME_ART.mascot} style={StyleSheet.absoluteFill} contentFit="contain" />
               ) : (
