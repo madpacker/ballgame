@@ -72,3 +72,4 @@
 - Dressing Room simplified: character-only selection (3+3 side slots), big character, no clothing rows/rotation. Lobby: big character (~50% height) + two rows of three 1:1 tiles (Time Attack, Classic, F100 / Tournament, Tentang Game, Streak Harian).
 - Character/mascot uploads are auto-trimmed (transparent margins) and capped at 1400px height.
 - NEW: POST /api/admin/matches/import (CSV: opponent,date,time(WIB),home,competition; aliases lawan,tanggal,jam,kandang,kompetisi). Skips past/duplicate/invalid rows. Admin button testID import-matches-csv-button.
+- NEW: POST /api/admin/news/fetch-url {url}: decodes Google News links (googlenewsdecoder), extracts the title + clean body text (trafilatura, sponsor/"baca juga" lines filtered), and copies og:image to storage. The admin news form has a link field + AMBIL button (testIDs news-url-input, news-fetch-button); the fetched cover is sent as the cover_url form field on POST /api/admin/news.

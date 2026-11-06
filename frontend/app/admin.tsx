@@ -75,6 +75,12 @@ export default function AdminScreen() {
   const [photo, setPhoto] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; txt: string } | null>(null);
+  // Toast at the bottom of the screen hides itself after a few seconds.
+  useEffect(() => {
+    if (!msg) return;
+    const t = setTimeout(() => setMsg(null), 7000);
+    return () => clearTimeout(t);
+  }, [msg]);
   const [players, setPlayers] = useState<ApiPlayer[]>([]);
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
@@ -105,6 +111,9 @@ export default function AdminScreen() {
   const [newsTitle, setNewsTitle] = useState("");
   const [newsBody, setNewsBody] = useState("");
   const [newsCover, setNewsCover] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [newsCoverUrl, setNewsCoverUrl] = useState<string | null>(null);
+  const [newsUrl, setNewsUrl] = useState("");
+  const [newsFetching, setNewsFetching] = useState(false);
   const [newsSubmitting, setNewsSubmitting] = useState(false);
 
   // Quiz Items (Trivia & Garuda Call)
@@ -466,6 +475,30 @@ export default function AdminScreen() {
     if (!r.canceled && r.assets[0]) setNewsCover(r.assets[0]);
   };
 
+  const fetchNewsUrl = async () => {
+    if (!/^https?:\/\//i.test(newsUrl.trim())) {
+      setMsg({ kind: "err", txt: "Tempel link berita yang diawali https://" });
+      return;
+    }
+    setNewsFetching(true);
+    try {
+      const r = await api<{ title: string; body: string; cover_url: string | null; source_name: string; source_url: string }>(
+        "/admin/news/fetch-url",
+        { method: "POST", body: JSON.stringify({ url: newsUrl.trim() }) },
+      );
+      setNewsTitle(r.title);
+      setNewsBody(`${r.body}\n\nSumber: ${r.source_name}`);
+      setNewsCover(null);
+      setNewsCoverUrl(r.cover_url);
+      setMsg({ kind: "ok", txt: "Berita berhasil diambil. Periksa lalu tekan TERBITKAN." });
+    } catch (e: any) {
+      const m = String(e?.message || "").match(/"detail":"([^"]+)"/);
+      setMsg({ kind: "err", txt: m?.[1] || "Gagal mengambil berita dari link." });
+    } finally {
+      setNewsFetching(false);
+    }
+  };
+
   const submitNews = async () => {
     if (!newsTitle.trim() || !newsBody.trim()) {
       setMsg({ kind: "err", txt: "Judul dan isi berita wajib." });
@@ -488,6 +521,7 @@ export default function AdminScreen() {
         fields: {
           title: newsTitle.trim(),
           body: newsBody.trim(),
+          ...(!newsCover && newsCoverUrl ? { cover_url: newsCoverUrl } : {}),
         },
         files: files as any,
       });
@@ -496,6 +530,8 @@ export default function AdminScreen() {
       setNewsTitle("");
       setNewsBody("");
       setNewsCover(null);
+      setNewsCoverUrl(null);
+      setNewsUrl("");
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       refresh();
     } catch {
@@ -762,6 +798,11 @@ export default function AdminScreen() {
 
   return (
     <View style={styles.container}>
+      {msg && (
+        <Pressable testID="admin-toast" onPress={() => setMsg(null)} style={[styles.toast, msg.kind === "err" ? styles.toastErr : styles.toastOk]}>
+          <Text style={styles.toastTxt}>{msg.txt}</Text>
+        </Pressable>
+      )}
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <Pressable testID="back-button" onPress={() => router.back()} hitSlop={10} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
@@ -1448,9 +1489,39 @@ export default function AdminScreen() {
         {/* POSTING BERITA BARU */}
         <View style={styles.formCard}>
           <Text style={styles.sectionLabel}>POSTING BERITA BARU</Text>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Ambil dari link berita (Google Berita / situs berita)</Text>
+            <View style={{ flexDirection: "row", gap: spacing.sm }}>
+              <TextInput
+                testID="news-url-input"
+                value={newsUrl}
+                onChangeText={setNewsUrl}
+                placeholder="Tempel link artikel di sini"
+                placeholderTextColor={colors.muted}
+                autoCapitalize="none"
+                keyboardType="url"
+                style={[styles.input, { flex: 1 }]}
+              />
+              <Pressable
+                testID="news-fetch-button"
+                onPress={fetchNewsUrl}
+                disabled={newsFetching}
+                style={[styles.cta, { paddingHorizontal: spacing.md, minWidth: 96 }, newsFetching && { opacity: 0.5 }]}
+              >
+                {newsFetching ? (
+                  <ActivityIndicator color={colors.onBrandPrimary} />
+                ) : (
+                  <Text style={styles.ctaTxt}>AMBIL</Text>
+                )}
+              </Pressable>
+            </View>
+            <Text style={styles.photoHint}>Judul, isi artikel (tanpa iklan/sponsor) dan foto akan terisi otomatis. Periksa dulu sebelum terbit.</Text>
+          </View>
           <Pressable testID="pick-news-cover" onPress={pickNewsCover} style={styles.photoPicker}>
             {newsCover ? (
               <Image source={newsCover.uri} style={styles.photoPreview} />
+            ) : newsCoverUrl ? (
+              <Image testID="news-cover-fetched" source={absoluteFileUrl(newsCoverUrl)} style={styles.photoPreview} />
             ) : (
               <View style={styles.photoPlaceholder}>
                 <Ionicons name="image" size={32} color={colors.muted} />
@@ -1767,6 +1838,21 @@ const styles = StyleSheet.create({
   posTxtActive: { color: colors.onBrandPrimary },
   msg: { fontSize: 12 },
   msgOk: { color: colors.success },
+  toast: {
+    position: "absolute",
+    left: spacing.md,
+    right: spacing.md,
+    bottom: spacing.xl,
+    zIndex: 50,
+    elevation: 12,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    backgroundColor: colors.surface,
+  },
+  toastOk: { borderColor: colors.success },
+  toastErr: { borderColor: colors.error },
+  toastTxt: { color: colors.onSurface, fontSize: 13, fontWeight: "700" },
   msgErr: { color: colors.error },
   cta: {
     backgroundColor: colors.brandPrimary,

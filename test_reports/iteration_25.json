@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 25 tested the admin match-fixture CSV import and the news fetch-from-URL feature (Google News), backend and UI. Backend: 11/11 pytest passed. The CSV import handles English and Indonesian headers, ';' delimiter, DD/MM/YYYY dates and '19.00' times. 19:00 WIB is saved as 12:00 UTC. away/tandang sets home=false. competition defaults to Liga 1. Past, invalid, missing-field, existing and in-file duplicate rows are skipped with Indonesian messages. Non-admins get 401/403 and an empty file gets 400. fetch-url decodes real Google News RSS links. ANTARA, ANTARA Makassar, MetroTVNews and Radar Malang returned a title, a clean body, source_name and a /api/files cover. Vidio gave 422. Kompas.com and Bolasport.com gave 202 with an empty body (bot protection) and RRI gave 403, so all three return 502. Through the public ingress, the 502 JSON body is replaced by an HTML error page, so the UI shows only the generic error. Creating news with cover_url saves the cover; an external cover_url is ignored. UI (375x667): the CSV picker uploads, gives 'Impor jadwal: 2 dibuat, 1 dilewati. Baris 4: jadwal sudah lewat, dilewati.' and the list refreshes (2 to 4). News fetch fills the title and the body (ending with 'Sumber: Antara News') and shows the cover preview. Publishing works, the inputs clear, and the article appears in /news and its detail page with the cover. UX issue: the shared feedback message renders only inside the TAMBAH PEMAIN form at the top of the page (about 1600px above the CSV card and 5400px above the news form), so the admin does not see the import result or fetch errors. No deprecated Expo packages were found in the reviewed code.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/news/fetch-url", "issue": "Error responses use status 502. The Kubernetes ingress replaces a 502 upstream body with its own HTML page, so the Indonesian detail ('Halaman berita tidak bisa dibuka (202).') never reaches the client (verified via the public URL, while localhost:8001 returns JSON). Use 400 or 422 (or 424) for 'site refused or empty' so the detail survives."},
+      {"endpoint": "POST /api/admin/news/fetch-url", "issue": "Kompas.com and Bolasport.com (Kompas Gramedia, both major sources in Google News results) return HTTP 202 with an empty body to httpx (bot or JS challenge), and rri.co.id returns 403. These popular sources cannot be fetched at all. Consider full browser-like headers (Accept, sec-ch-ua, and so on), retrying with the AMP or ?page=all URL, or a clearer message suggesting a manual paste."},
+      {"endpoint": "POST /api/admin/news/fetch-url (_clean_news_body)", "issue": "Some junk lines get through: 'Berita ini telah tayang di Antaranews.com dengan judul: ...' (the regex covers only 'artikel ini telah tayang'), photo captions such as 'Madura United vs Arema FC. Foto: X/@MaduraUnitedFC', the byline 'Muhamad Marup • 6 November 2026 14:51', and a first line that repeats the title (Radar Malang). Meanwhile the broad prefixes 'promo' and 'partner' would also drop real football lines such as 'Promosi ke Liga 1...'."},
+      {"endpoint": "POST /api/admin/news/fetch-url", "issue": "Every fetch uploads the cover to object storage straight away, even if the news is never published. These orphaned files build up. The path also uses the quiz prefix 'qi_news_...' from the shared _import_image_from_url helper (cosmetic)."},
+      {"endpoint": "POST /api/admin/matches/import", "issue": "The duplicate check does not filter out deleted_at, so a fixture that was soft-deleted can never be re-imported (it is counted as 'sudah ada')."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "admin.tsx feedback message (msg)", "issue": "The msg Text renders only inside the TAMBAH PEMAIN BARU form (admin.tsx:886). After the CSV import, the 'Impor jadwal: ...' text sits at y=-1611 relative to the viewport. The news fetch errors and 'Berita berhasil diambil' sit at y=-5464. The admin gets no visible feedback near the button. Render the message (or a toast) next to import-matches-csv-button and in the news form.", "testID": "import-matches-csv-button, news-fetch-button", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "News fetch error from a blocked site (Kompas/Bolasport/RRI)", "issue": "The UI shows only the generic 'Gagal mengambil berita dari link.', because the ingress replaces the 502 JSON body with HTML and the regex /\"detail\":\"...\"/ finds no match.", "affected_testIDs": ["news-fetch-button"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter25_matches_csv_news_url.py",
+    "/app/backend/tests/seed_iter25_fe.py",
+    "/app/backend/tests/peek_iter25_fetch.py",
+    "/app/test_reports/pytest/pytest_iter25.xml"
+  ],
+  "action_items": [
+    "Show the admin feedback message near the action that triggered it (the CSV card and the news form), or use a toast. At present it appears only at the top of the page in the player form (admin.tsx:886).",
+    "fetch-url: replace status 502 with 400/422/424 so the Indonesian detail reaches the client through the ingress.",
+    "fetch-url: improve access to Kompas.com and Bolasport.com (HTTP 202 with an empty body) and RRI (403), for example with browser-like headers or an AMP URL, or show a clear 'situs memblokir, salin manual' message.",
+    "_clean_news_body: add 'berita ini telah tayang', photo captions ('Foto:'), the byline/timestamp line ('Nama • 6 November 2026 14:51') and a leading title duplicate. Narrow 'promo'/'partner' to whole words or ad context.",
+    "matches import: exclude soft-deleted matches from the duplicate check."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 3597 lines and admin.tsx is 2054 lines. Both are far over 700 lines and should be split into modules.",
+    "news_fetch_url can fetch any URL server-side (SSRF risk). It is admin-only, but consider blocking private/localhost hosts.",
+    "matches_import runs one find_one per row. That is fine for small CSVs, but a single $in query would be better."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter25_matches_csv_news_url.py",
+    "/app/backend/tests/seed_iter25_fe.py",
+    "/app/backend/tests/peek_iter25_fetch.py"
+  ],
+  "success_rate": {"backend": "100% (11/11 pytest). 4 of 7 real Google News articles fetched; 3 sites blocked", "frontend": "90% (all flows work; the feedback message is not visible near the actions)"},
+  "seed_data_creation": "TEST_it25_admin and TEST_it25_user with sessions TEST_tok_it25_admin/TEST_tok_it25_user (seed_iter25_fe.py seed). All TEST_it25 matches and news, plus the users and sessions, were removed with 'clean'. Fetched cover images remain in object storage (no delete API). Pre-existing 'TEST_News Iter12' news from an earlier iteration is still in the DB (not created by this run, not touched).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run 'python /app/backend/tests/seed_iter25_fe.py seed', then the pytest file, then 'clean'. Google News links come from the RSS feed; ANTARA and MetroTV work, Kompas and Bolasport give 202 with an empty body. /news may show an intro video first; click 'LEWATI'. The web DocumentPicker works with page.expect_file_chooser. Kickoff times display in the browser's timezone (UTC in Playwright, so 19:00 WIB shows as 12.00).",
+  "rca_of_issue": "Generic fetch error in the UI: the backend raises HTTPException(502, detail=...), which returns JSON on localhost:8001. The public ingress swaps 5xx bodies for an HTML error page, so the frontend regex on '\"detail\":' fails. Fix: use a 4xx status. Missing feedback: there is a single msg state rendered at one place in the JSX (inside the player form)."
+}

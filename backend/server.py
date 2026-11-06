@@ -1791,7 +1791,7 @@ async def matches_import(file: UploadFile = File(...), user: dict = Depends(requ
             errors.append(f"Baris {i}: jadwal sudah lewat, dilewati.")
             continue
         key = (opp.lower(), ko)
-        if key in seen or await db.matches.find_one({"opponent": {"$regex": f"^{re.escape(opp)}$", "$options": "i"}, "kickoff_at": ko}):
+        if key in seen or await db.matches.find_one({"opponent": {"$regex": f"^{re.escape(opp)}$", "$options": "i"}, "kickoff_at": ko, "deleted_at": {"$exists": False}}):
             dup += 1
             continue
         seen.add(key)
@@ -2327,11 +2327,105 @@ def _make_excerpt(body: str, limit: int = 160) -> str:
     return one[:limit] + ("…" if len(one) > limit else "")
 
 
+class NewsFetchIn(BaseModel):
+    url: str
+
+
+# Lines that are ads, sponsor blocks or "read also" links rather than the story itself.
+_NEWS_JUNK = re.compile(
+    r"^(baca juga|baca:|lihat juga|simak juga|simak video|tonton juga|advertisement|iklan|sponsored|"
+    r"scroll to continue|scroll untuk|artikel ini telah tayang|berita ini telah tayang|"
+    r"dapatkan update|ikuti kami|follow us|"
+    r"download aplikasi|unduh aplikasi|editor\s*:|penulis\s*:|reporter\s*:|pewarta\s*:|sumber\s*:|copyright|©|"
+    r"foto\s*:|\(foto|ilustrasi\s*:|klik di sini|berita terkait|artikel terkait|kode promo|ads by|"
+    r"\(adv\)|\[adv\]|pariwara|.*whatsapp channel|.*google news|.*telegram channel)",
+    re.IGNORECASE,
+)
+
+
+def _clean_news_body(text: str, title: str = "") -> str:
+    lines = []
+    t = title.strip().lower()
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if not s or _NEWS_JUNK.match(s) or len(s) < 3:
+            continue
+        if t and s.lower() == t:
+            continue
+        lines.append(s)
+    return "\n\n".join(lines)
+
+
+@api_router.post("/admin/news/fetch-url")
+async def news_fetch_url(body: NewsFetchIn, user: dict = Depends(require_admin)):
+    """Fetch an article (Google News links included) and return its title, clean body text and cover image."""
+    import trafilatura
+
+    url = body.url.strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="URL harus diawali http:// atau https://")
+    host = (httpx.URL(url).host or "").lower()
+    if host in ("localhost", "0.0.0.0") or re.match(r"^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1)", host):
+        raise HTTPException(status_code=422, detail="URL tidak diizinkan.")
+    if "news.google." in url:
+        try:
+            from googlenewsdecoder import gnewsdecoder
+            res = await run_in_threadpool(lambda: gnewsdecoder(url, interval=1))
+            if res.get("success") or res.get("status"):
+                url = res["decoded_url"]
+        except Exception as e:
+            logger.warning("gnews decode failed: %s", e)
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36",
+            "Accept-Language": "id-ID,id;q=0.9",
+        }) as c:
+            r = await c.get(url)
+            if r.status_code in (202, 403) or len(r.text or "") < 500:
+                # Some sites block mobile bots; retry once looking like a desktop browser.
+                r = await c.get(str(r.url), headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Referer": "https://news.google.com/",
+                })
+        url = str(r.url)
+        html = r.text
+    except Exception:
+        raise HTTPException(status_code=422, detail="Halaman berita tidak bisa dibuka.")
+    if r.status_code != 200 or not html or len(html) < 500:
+        raise HTTPException(status_code=422, detail=f"Situs berita menolak diambil otomatis ({r.status_code}). Salin judul & isi secara manual.")
+    if "news.google." in url:
+        raise HTTPException(status_code=422, detail="Link Google Berita tidak bisa dibuka. Buka artikelnya dulu lalu salin link dari situs aslinya.")
+
+    text = await run_in_threadpool(
+        lambda: trafilatura.extract(html, url=url, include_comments=False, include_tables=False,
+                                    include_links=False, include_images=False, favor_precision=True)
+    )
+    meta = await run_in_threadpool(lambda: trafilatura.extract_metadata(html, default_url=url))
+    title = (meta.title if meta else "") or ""
+    content = _clean_news_body(text or "", title)
+    if not content:
+        raise HTTPException(status_code=422, detail="Isi artikel tidak ditemukan di halaman ini.")
+
+    cover_url = None
+    img = meta.image if meta else None
+    if img and img.startswith(("http://", "https://")):
+        cover_url = await _import_image_from_url(user, img, f"news_{uuid.uuid4().hex[:8]}")
+    return {
+        "title": title.strip()[:200],
+        "body": content[:20000],
+        "cover_url": cover_url,
+        "source_url": url,
+        "source_name": (meta.sitename if meta and meta.sitename else re.sub(r"^www\.", "", httpx.URL(url).host)),
+    }
+
+
 @api_router.post("/admin/news", response_model=NewsOut)
 async def news_create(
     title: str = Form(...),
     body: str = Form(...),
     cover: Optional[UploadFile] = File(None),
+    cover_url: Optional[str] = Form(None),
     user: dict = Depends(require_admin),
 ):
     title = title.strip()
@@ -2339,7 +2433,8 @@ async def news_create(
     if not title or not body:
         raise HTTPException(status_code=422, detail="missing_fields")
     news_id = f"nw_{uuid.uuid4().hex[:12]}"
-    cover_url = None
+    # Cover already copied to our storage by /admin/news/fetch-url.
+    cover_url = cover_url if (cover_url and cover_url.startswith("/api/files/")) else None
     if cover is not None:
         content = await cover.read()
         if content:
