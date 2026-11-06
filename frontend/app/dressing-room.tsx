@@ -1,12 +1,10 @@
-import { View, Text, Pressable, StyleSheet, ScrollView, ImageBackground, ActivityIndicator, Platform, Alert } from "react-native";
+import { View, Text, Pressable, StyleSheet, ScrollView, ImageBackground, ActivityIndicator, Platform, Alert, useWindowDimensions } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Image } from "expo-image";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import * as ImagePicker from "expo-image-picker";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, runOnJS } from "react-native-reanimated";
 import { useCallback, useEffect, useState } from "react";
 
 import { spacing, radius } from "@/src/theme";
@@ -20,22 +18,20 @@ import CharacterStage, { type Outfit, type WItem } from "@/src/components/Charac
 const C = { cyan: "#36C8FF", orange: "#FF9A2E", white: "#FFFFFF", panel: "rgba(8,22,48,0.82)", slot: "rgba(30,110,180,0.35)" };
 const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;
 const SIDE_SLOTS = 3;
-const ROW_SLOTS = 6;
-const FIELD: Record<WItem["kind"], keyof Outfit> = { character: "character_id", top: "top_id", bottom: "bottom_id", shoes: "shoes_id" };
+const HEADER_H = 60;
 
 export default function DressingRoom() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { height, width } = useWindowDimensions();
   const { user } = useAuth();
   const isAdmin = !!user?.is_admin;
   const [items, setItems] = useState<WItem[] | null>(null);
   const [outfit, setOutfit] = useState<Outfit>({});
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState<string | null>(null);
-  const [back, setBack] = useState(false);
   const [menu, setMenu] = useState<WItem | null>(null);
   const { settings, refresh: refreshSettings } = useAppSettings();
-  const rot = useSharedValue(0);
 
   const load = useCallback(() => {
     api<WItem[]>("/wardrobe").then(setItems).catch(() => setItems([]));
@@ -45,42 +41,19 @@ export default function DressingRoom() {
     if (user) api<Outfit>("/me/outfit").then(setOutfit).catch(() => {});
   }, [load, user]);
 
-  // Default selections: first of each kind until the user picks.
-  const of = (k: WItem["kind"]) => (items ?? []).filter((i) => i.kind === k);
-  const current: Outfit = {
-    character_id: outfit.character_id ?? of("character")[0]?.item_id,
-    top_id: outfit.top_id ?? of("top")[0]?.item_id,
-    bottom_id: outfit.bottom_id ?? of("bottom")[0]?.item_id,
-    shoes_id: outfit.shoes_id ?? of("shoes")[0]?.item_id,
-  };
+  // Characters are full-body images, so the outfit is just the chosen character.
+  const chars = (items ?? []).filter((i) => i.kind === "character");
+  // A saved character that was deleted by admin falls back to the first one.
+  const savedOk = chars.some((c) => c.item_id === outfit.character_id);
+  const current: Outfit = { character_id: savedOk ? outfit.character_id : chars[0]?.item_id };
 
-  // Rotation: drag horizontally (or tap the arrows) to spin the character; past 90° shows the back view.
-  const updateBack = (deg: number) => setBack(Math.abs(((deg % 360) + 360) % 360 - 180) < 90);
-  const pan = Gesture.Pan()
-    .onChange((e) => {
-      rot.value += e.changeX * 0.8;
-      runOnJS(updateBack)(rot.value);
-    });
-  const spin = (d: number) => {
-    const next = rot.value + d;
-    rot.value = withSpring(next);
-    updateBack(next);
-  };
-  const stageStyle = useAnimatedStyle(() => {
-    const deg = ((rot.value % 360) + 360) % 360;
-    // Mirror the back half so the rear image faces the right way.
-    const shown = deg > 90 && deg < 270 ? deg - 180 : deg;
-    return { transform: [{ perspective: 800 }, { rotateY: `${shown}deg` }] };
-  });
-
-  const pick = (k: WItem["kind"], id: string) => {
+  const pick = (id: string) => {
     if (Platform.OS !== "web") void import("expo-haptics").then((h) => h.selectionAsync());
-    setOutfit((o) => ({ ...current, ...o, [FIELD[k]]: id }));
+    setOutfit({ character_id: id });
   };
 
   // Opened by direct link there is no history, so fall back to the lobby.
   const goBack = () => (router.canGoBack() ? router.back() : router.replace("/"));
-
   const notify = (t: string, m: string) => (Platform.OS === "web" ? window.alert(`${t}\n${m}`) : Alert.alert(t, m));
 
   const save = async () => {
@@ -91,7 +64,7 @@ export default function DressingRoom() {
       notify("Tersimpan!", "Karaktermu sudah tampil di lobi utama.");
       goBack();
     } catch {
-      notify("Gagal", "Pakaian belum tersimpan. Coba lagi.");
+      notify("Gagal", "Karakter belum tersimpan. Coba lagi.");
     }
     setSaving(false);
   };
@@ -106,31 +79,21 @@ export default function DressingRoom() {
       const token = await getToken();
       const res = await uploadForm(`${BACKEND}/api${path}`, {
         headers: { Authorization: `Bearer ${token}` },
-        fields: { ...fields, name: fields.name ?? (a.fileName?.split(".")[0] || "item") },
+        fields: { ...fields, name: a.fileName?.split(".")[0] || "karakter" },
         files: { image: { uri: a.uri, name: a.fileName || "image.png", mimeType: a.mimeType || "image/png" } },
       });
       if (!res.ok) throw new Error(await res.text());
       return true;
     } catch {
-      notify("Upload gagal", "Gunakan PNG (latar transparan untuk pakaian).");
+      notify("Upload gagal", "Gunakan gambar PNG atau JPG.");
       return false;
     } finally {
       setUploading(null);
     }
   };
 
-  const upload = async (k: WItem["kind"]) => {
-    if (await sendImage("/admin/wardrobe", k, { kind: k })) load();
-  };
-
-  const uploadBack = async (it: WItem) => {
-    setMenu(null);
-    if (await sendImage(`/admin/wardrobe/${it.item_id}/back`, it.item_id)) load();
-  };
-
-  const clearBack = (it: WItem) => {
-    setMenu(null);
-    api(`/admin/wardrobe/${it.item_id}/back`, { method: "DELETE" }).then(load).catch(() => {});
+  const upload = async () => {
+    if (await sendImage("/admin/wardrobe", "new", { kind: "character" })) load();
   };
 
   const remove = (it: WItem) => {
@@ -138,7 +101,7 @@ export default function DressingRoom() {
     const go = () => api(`/admin/wardrobe/${it.item_id}`, { method: "DELETE" }).then(load).catch(() => {});
     if (Platform.OS === "web") {
       if (window.confirm(`Hapus ${it.name}?`)) go();
-    } else Alert.alert("Hapus item?", it.name, [{ text: "Batal", style: "cancel" }, { text: "Hapus", style: "destructive", onPress: go }]);
+    } else Alert.alert("Hapus karakter?", it.name, [{ text: "Batal", style: "cancel" }, { text: "Hapus", style: "destructive", onPress: go }]);
   };
 
   const uploadMascot = async () => {
@@ -146,50 +109,42 @@ export default function DressingRoom() {
   };
   const clearMascot = () => api("/admin/app-settings/mascot", { method: "DELETE" }).then(refreshSettings).catch(() => {});
 
-  const Slot = ({ it, k, size }: { it?: WItem; k: WItem["kind"]; size: number }) => {
+  const slotSize = Math.min(110, Math.round(width * 0.22));
+  const Slot = ({ it }: { it?: WItem }) => {
     if (!it) {
       return (
         <Pressable
-          testID={`slot-empty-${k}`}
+          testID="slot-empty-character"
           disabled={!isAdmin || uploading !== null}
-          onPress={() => upload(k)}
-          style={[styles.slot, { width: size, height: size }]}
+          onPress={upload}
+          style={[styles.slot, { width: slotSize, height: slotSize }]}
         >
-          {isAdmin && (uploading === k ? <ActivityIndicator color={C.white} /> : <Ionicons name="add" size={26} color={C.white} />)}
+          {isAdmin && (uploading === "new" ? <ActivityIndicator color={C.white} /> : <Ionicons name="add" size={40} color={C.white} />)}
         </Pressable>
       );
     }
-    const on = current[FIELD[k]] === it.item_id;
+    const on = current.character_id === it.item_id;
     return (
       <Pressable
-        testID={`slot-${k}-${it.item_id}`}
-        onPress={() => pick(k, it.item_id)}
+        testID={`slot-character-${it.item_id}`}
+        onPress={() => pick(it.item_id)}
         onLongPress={isAdmin ? () => setMenu(it) : undefined}
-        style={[styles.slot, { width: size, height: size }, on && styles.slotOn]}
+        style={[styles.slot, { width: slotSize, height: slotSize }, on && styles.slotOn]}
       >
-        {uploading === it.item_id ? (
-          <ActivityIndicator color={C.white} />
-        ) : (
-          <Image source={absoluteFileUrl(it.image_url)} style={styles.thumb} contentFit="contain" />
-        )}
-        {isAdmin && it.back_url ? (
-          <View style={styles.backBadge}>
-            <Text style={styles.backBadgeTxt}>360°</Text>
-          </View>
-        ) : null}
+        <Image source={absoluteFileUrl(it.image_url)} style={styles.thumb} contentFit="contain" />
       </Pressable>
     );
   };
 
-  const side = (k: "character", from: number) =>
-    Array.from({ length: SIDE_SLOTS }).map((_, i) => <Slot key={i} it={of(k)[from + i]} k={k} size={78} />);
+  const side = (from: number) => Array.from({ length: SIDE_SLOTS }).map((_, i) => <Slot key={i} it={chars[from + i]} />);
+  const stageH = height - insets.top - insets.bottom - HEADER_H - spacing.md;
 
   return (
     <ImageBackground source={require("@/assets/bg/stadium.jpg")} style={styles.container} resizeMode="cover">
-      <LinearGradient colors={["rgba(4,30,70,0.85)", "rgba(6,40,90,0.75)", "rgba(3,18,42,0.95)"]} style={StyleSheet.absoluteFill} />
+      <LinearGradient colors={["rgba(4,30,70,0.80)", "rgba(6,40,90,0.65)", "rgba(3,18,42,0.92)"]} style={StyleSheet.absoluteFill} />
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <Pressable testID="back-button" onPress={goBack} style={styles.iconBtn}>
-          <Ionicons name="chevron-back" size={26} color={C.white} />
+          <Ionicons name="chevron-back" size={30} color={C.white} />
         </Pressable>
         <Text style={styles.title}>DRESSING ROOM</Text>
         <Pressable testID="dressing-save" disabled={saving} onPress={save} style={styles.saveBtn}>
@@ -200,36 +155,16 @@ export default function DressingRoom() {
       {items === null ? (
         <ActivityIndicator color={C.cyan} style={{ marginTop: 80 }} />
       ) : (
-        <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}>
-          <View style={styles.stageRow}>
-            <View style={styles.sideCol}>{side("character", 0)}</View>
-            <GestureDetector gesture={pan}>
-              <Animated.View testID="dressing-stage" style={[styles.stage, stageStyle]}>
-                <CharacterStage items={items} outfit={current} back={back} />
-              </Animated.View>
-            </GestureDetector>
-            <View style={styles.sideCol}>{side("character", SIDE_SLOTS)}</View>
-          </View>
-          <View style={styles.rotateRow}>
-            <Pressable testID="rotate-left" onPress={() => spin(-45)} style={styles.rotBtn}>
-              <Ionicons name="refresh" size={18} color={C.white} style={{ transform: [{ scaleX: -1 }] }} />
-            </Pressable>
-            <Text style={styles.rotHint}>Geser karakter untuk memutar</Text>
-            <Pressable testID="rotate-right" onPress={() => spin(45)} style={styles.rotBtn}>
-              <Ionicons name="refresh" size={18} color={C.white} />
-            </Pressable>
+        <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + spacing.lg }} showsVerticalScrollIndicator={false}>
+          {/* Big character in the middle with selectable character slots on both sides */}
+          <View style={[styles.stageWrap, { height: stageH }]}>
+            <View testID="dressing-stage" style={styles.stage}>
+              <CharacterStage items={items} outfit={current} />
+            </View>
+            <View style={[styles.sideCol, { left: 0 }]}>{side(0)}</View>
+            <View style={[styles.sideCol, { right: 0 }]}>{side(SIDE_SLOTS)}</View>
           </View>
 
-          {(["top", "bottom", "shoes"] as const).map((k) => (
-            <View key={k} style={styles.panel}>
-              <Text style={styles.rowLbl}>{k === "top" ? "BAJU" : k === "bottom" ? "CELANA" : "SEPATU"}</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
-                {Array.from({ length: Math.max(ROW_SLOTS, of(k).length + (isAdmin ? 1 : 0)) }).map((_, i) => (
-                  <Slot key={i} it={of(k)[i]} k={k} size={74} />
-                ))}
-              </ScrollView>
-            </View>
-          ))}
           {isAdmin && (
             <View style={styles.panel} testID="mascot-admin">
               <Text style={styles.rowLbl}>MASKOT LOBI (ADMIN)</Text>
@@ -244,7 +179,7 @@ export default function DressingRoom() {
                   )}
                 </View>
                 <View style={{ flex: 1, gap: spacing.sm }}>
-                  <Text style={styles.mascotTxt}>Tampil di layar utama untuk pemain yang belum memilih gaya.</Text>
+                  <Text style={styles.mascotTxt}>Tampil di layar utama untuk pemain yang belum memilih karakter.</Text>
                   <View style={{ flexDirection: "row", gap: spacing.sm }}>
                     <Pressable testID="mascot-upload" disabled={uploading !== null} onPress={uploadMascot} style={styles.adminBtn}>
                       <Text style={styles.adminBtnTxt}>{settings.mascot_url ? "GANTI" : "UPLOAD"}</Text>
@@ -257,12 +192,8 @@ export default function DressingRoom() {
                   </View>
                 </View>
               </View>
+              <Text style={styles.adminHint}>Tekan kotak “+” untuk upload karakter (gambar seluruh badan). Tekan lama karakter untuk menghapus.</Text>
             </View>
-          )}
-          {isAdmin && (
-            <Text style={styles.adminHint}>
-              Admin: tekan kotak “+” untuk upload tampak depan (karakter = seluruh badan, pakaian = PNG transparan). Tekan lama item untuk upload tampak belakang atau menghapus. Label 360° = sudah punya tampak belakang.
-            </Text>
           )}
         </ScrollView>
       )}
@@ -271,19 +202,9 @@ export default function DressingRoom() {
         <Pressable style={styles.overlay} onPress={() => setMenu(null)} testID="item-menu">
           <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
             <Text style={styles.sheetTitle}>{menu.name}</Text>
-            <Pressable testID="menu-upload-back" style={styles.sheetBtn} onPress={() => uploadBack(menu)}>
-              <Ionicons name="sync" size={18} color={C.cyan} />
-              <Text style={styles.sheetTxt}>{menu.back_url ? "Ganti tampak belakang" : "Upload tampak belakang"}</Text>
-            </Pressable>
-            {menu.back_url ? (
-              <Pressable testID="menu-clear-back" style={styles.sheetBtn} onPress={() => clearBack(menu)}>
-                <Ionicons name="close-circle" size={18} color={C.cyan} />
-                <Text style={styles.sheetTxt}>Hapus tampak belakang</Text>
-              </Pressable>
-            ) : null}
             <Pressable testID="menu-delete" style={styles.sheetBtn} onPress={() => remove(menu)}>
               <Ionicons name="trash" size={18} color={C.orange} />
-              <Text style={[styles.sheetTxt, { color: C.orange }]}>Hapus item</Text>
+              <Text style={[styles.sheetTxt, { color: C.orange }]}>Hapus karakter</Text>
             </Pressable>
             <Pressable testID="menu-cancel" style={styles.sheetBtn} onPress={() => setMenu(null)}>
               <Text style={[styles.sheetTxt, { opacity: 0.7 }]}>Batal</Text>
@@ -299,33 +220,28 @@ const glow = (c: string) => ({ shadowColor: c, shadowOpacity: 0.9, shadowRadius:
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#031228" },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: spacing.sm, paddingBottom: spacing.sm, minHeight: HEADER_H },
   iconBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  title: { color: C.white, fontWeight: "900", fontStyle: "italic", fontSize: 18, letterSpacing: 1, textShadowColor: C.cyan, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 10 },
+  title: { color: C.white, fontWeight: "900", fontStyle: "italic", fontSize: 22, letterSpacing: 1, textShadowColor: C.cyan, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 10 },
   saveBtn: { minWidth: 92, minHeight: 44, paddingHorizontal: spacing.md, borderRadius: radius.md, borderWidth: 2, borderColor: C.orange, backgroundColor: "rgba(120,50,0,0.6)", alignItems: "center", justifyContent: "center", ...glow(C.orange) },
-  saveTxt: { color: C.white, fontWeight: "900", fontSize: 18, letterSpacing: 1 },
-  stageRow: { flexDirection: "row", alignItems: "flex-start", paddingHorizontal: spacing.sm, gap: spacing.xs },
-  sideCol: { gap: spacing.sm, paddingTop: spacing.sm },
-  stage: { flex: 1, height: 380 },
-  rotateRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.md, marginVertical: spacing.sm },
-  rotBtn: { width: 44, height: 44, borderRadius: 22, borderWidth: 1.5, borderColor: C.cyan, alignItems: "center", justifyContent: "center", backgroundColor: C.panel },
-  rotHint: { color: "rgba(255,255,255,0.7)", fontSize: 11 },
+  saveTxt: { color: C.white, fontWeight: "900", fontSize: 20, letterSpacing: 1 },
+  stageWrap: { marginTop: spacing.sm },
+  stage: { flex: 1, marginHorizontal: "20%" },
+  sideCol: { position: "absolute", top: spacing.md, gap: spacing.md, paddingHorizontal: spacing.xs },
   panel: { marginHorizontal: spacing.md, marginTop: spacing.sm, padding: spacing.sm, borderRadius: radius.md, backgroundColor: C.panel, borderWidth: 1, borderColor: "rgba(54,200,255,0.35)", gap: 6 },
   rowLbl: { color: C.cyan, fontWeight: "900", fontSize: 11, letterSpacing: 2 },
-  slot: { borderRadius: radius.sm, borderWidth: 2, borderColor: C.cyan, backgroundColor: C.slot, alignItems: "center", justifyContent: "center", overflow: "hidden", ...glow(C.cyan) },
+  slot: { borderRadius: radius.md, borderWidth: 2, borderColor: C.cyan, backgroundColor: C.slot, alignItems: "center", justifyContent: "center", overflow: "hidden", ...glow(C.cyan) },
   slotOn: { borderColor: C.orange, backgroundColor: "rgba(255,154,46,0.35)", ...glow(C.orange) },
   thumb: { width: "88%", height: "88%" },
-  backBadge: { position: "absolute", bottom: 2, right: 2, paddingHorizontal: 4, borderRadius: 4, backgroundColor: C.orange },
-  backBadgeTxt: { color: C.white, fontSize: 9, fontWeight: "900" },
   mascotRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
   mascotTxt: { color: "rgba(255,255,255,0.8)", fontSize: 12 },
   adminBtn: { minHeight: 44, paddingHorizontal: spacing.md, borderRadius: radius.md, borderWidth: 1.5, borderColor: C.cyan, alignItems: "center", justifyContent: "center" },
   adminBtnDanger: { borderColor: C.orange },
   adminBtnTxt: { color: C.white, fontWeight: "900", fontSize: 12, letterSpacing: 1 },
+  adminHint: { color: "rgba(255,255,255,0.7)", fontSize: 11, marginTop: spacing.xs },
   overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" },
   sheet: { backgroundColor: "#071a38", borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: spacing.md, paddingBottom: spacing.xl, borderTopWidth: 2, borderColor: C.cyan },
   sheetTitle: { color: C.white, fontWeight: "900", fontSize: 15, marginBottom: spacing.sm, textAlign: "center" },
   sheetBtn: { flexDirection: "row", alignItems: "center", gap: spacing.sm, minHeight: 48, paddingHorizontal: spacing.sm },
   sheetTxt: { color: C.white, fontSize: 14, fontWeight: "700" },
-  adminHint: { color: "rgba(255,255,255,0.7)", fontSize: 11, textAlign: "center", marginTop: spacing.md, paddingHorizontal: spacing.lg },
 });

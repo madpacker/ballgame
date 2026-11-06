@@ -117,6 +117,7 @@ export default function AdminScreen() {
   const [qiSubmitting, setQiSubmitting] = useState(false);
   const [qiEditId, setQiEditId] = useState<string | null>(null);
   const [csvBusy, setCsvBusy] = useState(false);
+  const [matchCsvBusy, setMatchCsvBusy] = useState(false);
 
   useEffect(() => {
     setDescDraft(settings.description ?? "");
@@ -676,6 +677,39 @@ export default function AdminScreen() {
     }
   };
 
+  const importMatchesCsv = async () => {
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: ["text/csv", "text/comma-separated-values", "application/csv", "*/*"],
+        copyToCacheDirectory: true,
+      });
+      if (picked.canceled || !picked.assets?.[0]) return;
+      const asset = picked.assets[0];
+      setMatchCsvBusy(true);
+      const token = await getToken();
+      const res = await uploadForm(`${BACKEND}/api/admin/matches/import`, {
+        headers: { Authorization: `Bearer ${token}` },
+        files: { file: { uri: asset.uri, name: asset.name || "jadwal.csv", mimeType: asset.mimeType || "text/csv" } } as any,
+      });
+      if (!res.ok) {
+        setMsg({ kind: "err", txt: `Impor gagal: ${(await res.text()).slice(0, 120)}` });
+        return;
+      }
+      const data: { created: number; skipped: number; errors: string[] } = await res.json();
+      setMsg({
+        kind: data.created > 0 ? "ok" : "err",
+        txt: `Impor jadwal: ${data.created} dibuat, ${data.skipped} dilewati.${
+          data.errors?.length ? ` ${data.errors.slice(0, 3).join("; ")}` : ""
+        }`,
+      });
+      refresh();
+    } catch {
+      setMsg({ kind: "err", txt: "Impor CSV jadwal gagal." });
+    } finally {
+      setMatchCsvBusy(false);
+    }
+  };
+
   const importCsv = async () => {
     try {
       const picked = await DocumentPicker.getDocumentAsync({
@@ -954,6 +988,30 @@ export default function AdminScreen() {
               <>
                 <Ionicons name="calendar" size={18} color={colors.onBrandPrimary} />
                 <Text style={styles.ctaTxt}>TAMBAH JADWAL</Text>
+              </>
+            )}
+          </Pressable>
+        </View>
+
+        <View style={styles.csvCard}>
+          <Text style={styles.csvHeadTxt}>IMPOR JADWAL CSV</Text>
+          <Text style={styles.csvDesc}>
+            Kolom: <Text style={styles.csvMono}>opponent, date, time, home, competition</Text>. Contoh baris:{" "}
+            <Text style={styles.csvMono}>Persija, 2026-08-20, 19:00, home, Liga 1</Text>. Jam dalam WIB. home = home/away.
+            competition opsional (default Liga 1). Jadwal yang sudah lewat atau sudah ada dilewati.
+          </Text>
+          <Pressable
+            testID="import-matches-csv-button"
+            onPress={importMatchesCsv}
+            disabled={matchCsvBusy}
+            style={[styles.ctaSecondaryGhost, matchCsvBusy && { opacity: 0.5 }]}
+          >
+            {matchCsvBusy ? (
+              <ActivityIndicator color={colors.brandPrimary} />
+            ) : (
+              <>
+                <Ionicons name="cloud-upload" size={18} color={colors.brandPrimary} />
+                <Text style={styles.ctaSecondaryGhostTxt}>PILIH FILE CSV JADWAL</Text>
               </>
             )}
           </Pressable>
@@ -1280,7 +1338,7 @@ export default function AdminScreen() {
                 prompt, option_a, option_b, option_c, option_d, answer_index, active, image_url
               </Text>
               . Baris header wajib ada. answer_index 0-3 (A-D). Kolom active & image_url
-              opsional.
+              opsional. Link gambar (juga Google Drive/Dropbox yang dibagikan publik) otomatis diunggah ke kotak gambar soal.
             </Text>
             <Pressable
               testID="import-csv-button"

@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 24 tested the trimming of transparent margins on uploads, the redesigned Dressing Room and the new lobby layout, at 390x844. Backend: 9 of 9 new tests pass (test_iter24_trim_wardrobe.py), and the iter21/23 wardrobe and mascot regression tests also pass. Character uploads are trimmed: a 200x400 image became 108x208, and the UI upload became 90x290. Uploads without transparent margins and JPEGs are left unchanged. Non-character kinds are not trimmed, and the mascot upload is trimmed. PUT /me/outfit with only character_id persists. Frontend: the Dressing Room has no BAJU/CELANA/SEPATU rows and no rotate controls. It shows 6 side slots (3 left, 3 right). A non-admin sees empty, disabled slots with no '+'; an admin sees '+'. Picking a slot turns it orange and switches the big character. SAVE sends exactly {\"character_id\":...}, shows a dialog and goes to '/'. back-button with no history goes to '/'. As admin, the mascot-admin panel works: uploading a mascot through the UI was tested. Uploading through the '+' slot works. Long-pressing a character opens item-menu with only menu-delete and menu-cancel, and deleting a TEST item works. Lobby: hero-mascot is 422px (50% of 844) and shows lobby-mascot when there is no outfit, or the saved character after SAVE. All 6 tiles are 116.7x116.7 squares with no truncated text. All tiles and dress-chip/hero navigate to the right place. Notifications, settings, the bottom nav and the weekly theme banner render. No deprecated Expo packages were found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/app-settings/mascot, POST /api/admin/wardrobe (character)", "issue": "Trimming crops but never resizes. The current mascot is 1067x3116 and 1.6MB, so the lobby hero area is empty for about 2-4s on first load. Suggest downscaling (e.g. max 1400px tall) inside _trim_transparent."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Lobby hero / Dressing Room with a stale outfit", "issue": "If the saved outfit.character_id points to a deleted wardrobe item, the lobby shows the generic Ionicons body instead of falling back to the mascot. Reference: index.tsx:207. In the Dressing Room, `current` keeps the stale id, so no slot is highlighted and SAVE sends the deleted id. The backend returns 422 invalid_character_id and the user sees 'Gagal'. Reference: dressing-room.tsx:46. Found by code review; not reproduced in the UI.", "testID": "hero-mascot, dressing-save", "priority": "MEDIUM"},
+      {"component": "Lobby after logout", "issue": "useFocusEffect returns early when user is null without resetting outfit/wardrobe. The previous user's character stays on the lobby after logout until reload. Reference: index.tsx:72-75.", "testID": "hero-mascot", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Lobby (390x844)", "issues": ["Tile row 2 (Tournament / Tentang Game / Streak Harian) starts at y=740 and the bottom nav starts at y=781. Row 2 is mostly hidden on first view and needs a scroll. Scrolling works and the row becomes fully visible above the nav."]},
+      {"screen": "Dressing Room item-menu", "issue_note": "cosmetic", "issues": ["The real character names are derived from filenames (e.g. '259622'), which looks odd in the sheet title. Consider a default name such as 'Karakter N'."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter24_trim_wardrobe.py", "/app/test_reports/pytest/pytest_iter24.xml"],
+  "action_items": [
+    "Fall back to the mascot or the first character when outfit.character_id is not in the wardrobe list (index.tsx:207). In dressing-room.tsx:46, use chars.find(c => c.item_id === outfit.character_id)?.item_id ?? chars[0]?.item_id.",
+    "Reset outfit/wardrobe state when user becomes null in the lobby's useFocusEffect.",
+    "Optional: downscale trimmed character and mascot PNGs (e.g. max 1400px) to cut the 1.6MB load time of the lobby mascot.",
+    "Optional: consider fitting row 2 of the tiles above the bottom nav at 390x844 (e.g. hero ~45%), or accept that it needs a scroll."
+  ],
+  "critical_code_review_comments": [
+    "adjustsFontSizeToFit on about-card does nothing on web. The text fits today, but a longer description would overflow on web.",
+    "In _store_image, the trimmed output is re-encoded as PNG even when the input was a palette or LA PNG. This is fine, but large RGBA PNGs are never compressed or resized.",
+    "Tests iter23 and iter24 both touch app_settings.mascot_url and restore it. Under pytest-xdist they can race, so run them with -n0."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter24_trim_wardrobe.py"],
+  "success_rate": {"backend": "100% (9/9 new + 22/22 regression)", "frontend": "100% of requested flows"},
+  "seed_data_creation": "Temporary TEST_it24_be_admin / TEST_it24_be_user / TEST_it24_fe_admin users and sessions, plus TEST wardrobe items, were all removed. mascot_url was restored to /api/files/cakmad-quiz/uploads/trim/mascot_27efa1.png. The outfit u_shot got during the SAVE test was unset again. The real items wd_a68e88cfc7d4 and wd_8bd2e6ec747b were not touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run test_iter24 with -n0 (xdist is on by default). The non-admin session is tok_shot_123 (u_shot). For admin tests, seed a TEST_ admin user plus session in Mongo. To upload through the UI on web, use page.expect_file_chooser on slot-empty-character or mascot-upload. Long-press works with mouse.down, a 1s wait, then mouse.up."
+}

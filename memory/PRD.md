@@ -66,3 +66,9 @@
 
 ## Iteration 24 (Jun 2026)
 - CSV import (quiz items per category + Football 100) now puts the new rows at the top of the admin list (order_index 0..n-1, existing items shifted down with $inc). Test updated: test_order_index_imports_go_to_top.
+- CSV import: image links (columns image_url/gambar/foto/image/url_gambar/link_gambar/image_link) are downloaded and stored in object storage automatically; Google Drive/Dropbox share links are converted to direct downloads. Failed share links show a per-row warning; failed direct links keep the original URL.
+
+## Iteration 25 (Jun 2026)
+- Dressing Room simplified: character-only selection (3+3 side slots), big character, no clothing rows/rotation. Lobby: big character (~50% height) + two rows of three 1:1 tiles (Time Attack, Classic, F100 / Tournament, Tentang Game, Streak Harian).
+- Character/mascot uploads are auto-trimmed (transparent margins) and capped at 1400px height.
+- NEW: POST /api/admin/matches/import (CSV: opponent,date,time(WIB),home,competition; aliases lawan,tanggal,jam,kandang,kompetisi). Skips past/duplicate/invalid rows. Admin button testID import-matches-csv-button.

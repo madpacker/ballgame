@@ -1,4 +1,4 @@
-import { View, Text, Pressable, StyleSheet, ScrollView, Platform, ImageBackground } from "react-native";
+import { View, Text, Pressable, StyleSheet, ScrollView, Platform, ImageBackground, useWindowDimensions } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
@@ -25,7 +25,6 @@ const L = {
   xp: "#36D1A6",
   gold: "#FFC23A",
   orange: "#FF7A1A",
-  purple: "#C2187A",
   glass: "rgba(10,22,52,0.78)",
   red: "#E31B23",
 };
@@ -36,6 +35,7 @@ type Xp = { xp: number; level: number; level_xp: number; level_size: number };
 export default function Home() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { height } = useWindowDimensions();
   const { user } = useAuth();
   const { settings } = useAppSettings();
   const customBg = absoluteFileUrl(settings.background_url);
@@ -47,6 +47,8 @@ export default function Home() {
   const [wardrobe, setWardrobe] = useState<WItem[]>([]);
   const [outfit, setOutfit] = useState<Outfit>({});
   const tourOn = !!settings.tournament_enabled;
+  // The character takes most of the screen; the two rows of tiles sit below it.
+  const mascotH = Math.max(300, Math.round(height * 0.5));
 
   useEffect(() => {
     api<{ title: string; subtitle: string; accent: string; id: string }>("/weekly-theme")
@@ -69,6 +71,7 @@ export default function Home() {
     useCallback(() => {
       if (!user) {
         setXp(null);
+        setOutfit({});
         return;
       }
       api<Xp>("/me/xp").then(setXp).catch(() => setXp(null));
@@ -113,8 +116,8 @@ export default function Home() {
       resizeMode="cover"
     >
       <LinearGradient
-        colors={["rgba(10,40,110,0.55)", "rgba(7,22,55,0.82)", "rgba(7,22,55,0.97)"]}
-        locations={[0, 0.45, 1]}
+        colors={["rgba(10,40,110,0.45)", "rgba(7,22,55,0.70)", "rgba(7,22,55,0.97)"]}
+        locations={[0, 0.55, 1]}
         style={StyleSheet.absoluteFill}
       />
       <LinearGradient colors={["rgba(120,190,255,0.40)", "rgba(120,190,255,0)"]} style={styles.floodlight} pointerEvents="none" />
@@ -196,185 +199,134 @@ export default function Home() {
           </Pressable>
         )}
 
-        {/* ---------- Bento grid ---------- */}
-        <View style={styles.bento}>
-          {/* Left column */}
-          <View style={styles.col}>
-            <Pressable testID="hero-mascot" onPress={() => router.push("/dressing-room")} style={styles.mascot}>
-              {outfit.character_id ? (
-                <CharacterStage items={wardrobe} outfit={outfit} />
-              ) : settings.mascot_url ? (
-                <Image testID="lobby-mascot" source={absoluteFileUrl(settings.mascot_url)} style={StyleSheet.absoluteFill} contentFit="contain" />
-              ) : HOME_ART.mascot ? (
-                <Image source={HOME_ART.mascot} style={StyleSheet.absoluteFill} contentFit="contain" />
+        {/* ---------- Big character ---------- */}
+        <Pressable testID="dress-chip" onPress={() => router.push("/dressing-room")} style={styles.dressChip}>
+          <Ionicons name="shirt" size={16} color={L.white} />
+          <Text style={styles.dressTxt}>GANTI GAYA</Text>
+        </Pressable>
+        <Pressable testID="hero-mascot" onPress={() => router.push("/dressing-room")} style={[styles.mascot, { height: mascotH }]}>
+          {outfit.character_id && wardrobe.some((w) => w.item_id === outfit.character_id) ? (
+            <CharacterStage items={wardrobe} outfit={{ character_id: outfit.character_id }} />
+          ) : settings.mascot_url ? (
+            <Image testID="lobby-mascot" source={absoluteFileUrl(settings.mascot_url)} style={styles.mascotImg} contentFit="contain" />
+          ) : HOME_ART.mascot ? (
+            <Image source={HOME_ART.mascot} style={styles.mascotImg} contentFit="contain" />
+          ) : (
+            <Ionicons name="body" size={180} color="rgba(255,255,255,0.88)" />
+          )}
+        </Pressable>
+
+        {/* ---------- Game modes (1:1 tiles) ---------- */}
+        <View style={styles.tileRow}>
+          <Pressable
+            testID="mode-time-attack-button"
+            onPress={() => go("time_attack")}
+            style={({ pressed }) => [styles.tile, styles.taCard, pressed && styles.pressed]}
+          >
+            <LinearGradient colors={["#0E4E7A", "#0A2B57", "#0B1C40"]} style={StyleSheet.absoluteFill} />
+            <Text numberOfLines={2} style={styles.tileTitle}>TIME ATTACK</Text>
+            <Text numberOfLines={2} style={styles.tileSub}>60 detik • jawab sebanyak mungkin</Text>
+            <View style={styles.tileArt}>
+              {HOME_ART.timeAttack ? (
+                <Image source={HOME_ART.timeAttack} style={StyleSheet.absoluteFill} contentFit="contain" />
               ) : (
-                <View style={styles.mascotPh}>
-                  <Ionicons name="body" size={120} color="rgba(255,255,255,0.88)" />
-                  <View style={styles.goldBall}>
-                    <Ionicons name="football" size={44} color={L.gold} />
-                  </View>
-                </View>
+                <Ionicons name="timer" size={34} color={L.cyan} />
               )}
-              <View style={styles.dressChip}>
-                <Ionicons name="shirt" size={12} color={L.white} />
-                <Text style={styles.dressTxt}>GANTI GAYA</Text>
-              </View>
-            </Pressable>
-
-            <Pressable
-              testID="mode-tournament-button"
-              onPress={() => {
-                tap();
-                router.push("/tournament");
-              }}
-              style={({ pressed }) => [styles.card, styles.tourCard, pressed && styles.pressed]}
-            >
-              <LinearGradient colors={["#7A0F5C", "#3A0A3E", "#1B0830"]} style={StyleSheet.absoluteFill} />
-              <Text numberOfLines={1} style={[styles.cardTitle, { fontSize: 17 }]}>TOURNAMENT</Text>
-              <View style={styles.rowBetween}>
-                <Text style={styles.cardSub}>
-                  {tourOn ? "Dibuka · Classic · Time Attack · Royal" : "Terkunci • Tournament belum dibuka admin"}
-                </Text>
-                <Ionicons name="play-forward" size={22} color="#FF6FB5" />
-              </View>
-              <View style={styles.tourArt}>
-                {HOME_ART.tournament ? (
-                  <Image source={HOME_ART.tournament} style={StyleSheet.absoluteFill} contentFit="contain" />
-                ) : (
-                  <View style={styles.trophyGlow}>
-                    <Ionicons name="trophy" size={64} color={L.gold} />
-                    {!tourOn && (
-                      <View style={styles.lockChip}>
-                        <Ionicons name="lock-closed" size={20} color={L.white} />
-                      </View>
-                    )}
-                  </View>
-                )}
-              </View>
-              <Text style={styles.tourAboutTitle}>Tentang Turnamen</Text>
-              <Text style={styles.tourAbout}>
-                Bersainglah dengan ribuan pemain lain di panggung turnamen bergengsi. Jawab kuis secepat dan setepat
-                mungkin, panjat papan peringkat, dan rebut trofi juara serta hadiah eksklusif!
-              </Text>
-            </Pressable>
-
-            <Pressable
-              testID="mode-f100-button"
-              onPress={() => {
-                tap();
-                router.push("/f100");
-              }}
-              style={({ pressed }) => [styles.card, styles.f100Card, pressed && styles.pressed]}
-            >
-              <LinearGradient colors={["#0F5A3A", "#0A3A2A", "#082418"]} style={StyleSheet.absoluteFill} />
-              <Text numberOfLines={1} style={[styles.cardTitle, { fontSize: 17 }]}>
-                FOOTBALL <Text style={{ color: L.gold }}>100</Text>
-              </Text>
-              <Text style={styles.cardSub}>Susun 4 jawaban benar sesuai urutan. Sempurna = 100 poin!</Text>
-              <View style={styles.f100Slots}>
-                {[1, 2, 3, 4].map((n) => (
-                  <View key={n} style={styles.f100Slot}>
-                    <Text style={styles.f100SlotTxt}>{n}</Text>
-                  </View>
-                ))}
-                <Ionicons name="play-forward" size={20} color={L.xp} style={{ marginLeft: "auto" }} />
-              </View>
-            </Pressable>
-
-            <View testID="about-card" style={[styles.card, styles.aboutCard]}>
-              <Text style={styles.aboutTitle}>Tentang Game</Text>
-              <Text style={styles.aboutBody}>
-                UJI KEMAMPUAN KALIAN SEBERAPA TAHU TENTANG LIGA INDONESIA DAN TIMNAS
-              </Text>
             </View>
+          </Pressable>
+
+          <Pressable
+            testID="mode-classic-button"
+            onPress={() => go("classic")}
+            style={({ pressed }) => [styles.tile, styles.classicCard, pressed && styles.pressed]}
+          >
+            <LinearGradient colors={["#4A3A0A", "#6A2A06", "#B04A08"]} style={StyleSheet.absoluteFill} />
+            <Text numberOfLines={2} style={styles.tileTitle}>MODE CLASSIC</Text>
+            <Text numberOfLines={2} style={styles.tileSub}>10 soal • poin akurasi</Text>
+            <View style={styles.tileArt}>
+              {HOME_ART.classic ? (
+                <Image source={HOME_ART.classic} style={StyleSheet.absoluteFill} contentFit="contain" />
+              ) : (
+                <Ionicons name="trophy" size={34} color={L.gold} style={styles.goldGlowIcon} />
+              )}
+            </View>
+          </Pressable>
+
+          <Pressable
+            testID="mode-f100-button"
+            onPress={() => {
+              tap();
+              router.push("/f100");
+            }}
+            style={({ pressed }) => [styles.tile, styles.f100Card, pressed && styles.pressed]}
+          >
+            <LinearGradient colors={["#0F5A3A", "#0A3A2A", "#082418"]} style={StyleSheet.absoluteFill} />
+            <Text numberOfLines={2} style={styles.tileTitle}>
+              FOOTBALL <Text style={{ color: L.gold }}>100</Text>
+            </Text>
+            <Text numberOfLines={2} style={styles.tileSub}>Susun 4 jawaban sesuai urutan</Text>
+            <View style={styles.f100Slots}>
+              {[1, 2, 3, 4].map((n) => (
+                <View key={n} style={styles.f100Slot}>
+                  <Text style={styles.f100SlotTxt}>{n}</Text>
+                </View>
+              ))}
+            </View>
+          </Pressable>
+        </View>
+
+        <View style={styles.tileRow}>
+          <Pressable
+            testID="mode-tournament-button"
+            onPress={() => {
+              tap();
+              router.push("/tournament");
+            }}
+            style={({ pressed }) => [styles.tile, styles.tourCard, pressed && styles.pressed]}
+          >
+            <LinearGradient colors={["#7A0F5C", "#3A0A3E", "#1B0830"]} style={StyleSheet.absoluteFill} />
+            <Text numberOfLines={2} style={styles.tileTitle}>TOURNAMENT</Text>
+            <Text numberOfLines={2} style={styles.tileSub}>{tourOn ? "Dibuka • ayo ikut!" : "Terkunci • belum dibuka admin"}</Text>
+            <View style={styles.tileArt}>
+              {HOME_ART.tournament ? (
+                <Image source={HOME_ART.tournament} style={StyleSheet.absoluteFill} contentFit="contain" />
+              ) : (
+                <Ionicons name={tourOn ? "trophy" : "lock-closed"} size={32} color={L.gold} />
+              )}
+            </View>
+          </Pressable>
+
+          <View testID="about-card" style={[styles.tile, styles.aboutCard]}>
+            <Text numberOfLines={2} style={styles.tileTitle}>TENTANG GAME</Text>
+            <Text numberOfLines={5} adjustsFontSizeToFit style={styles.tileSub}>
+              UJI KEMAMPUAN KALIAN SEBERAPA TAHU TENTANG LIGA INDONESIA DAN TIMNAS
+            </Text>
           </View>
 
-          {/* Right column */}
-          <View style={styles.col}>
-            <Pressable
-              testID="mode-time-attack-button"
-              onPress={() => go("time_attack")}
-              style={({ pressed }) => [styles.card, styles.taCard, pressed && styles.pressed]}
-            >
-              <LinearGradient colors={["#0E4E7A", "#0A2B57", "#0B1C40"]} style={StyleSheet.absoluteFill} />
-              <Text numberOfLines={1} adjustsFontSizeToFit style={styles.cardTitle}>TIME ATTACK</Text>
-              <View style={styles.rowBetween}>
-                <Text style={styles.cardSub}>Jump into action and answer as fast as possible!</Text>
-                <Ionicons name="play-forward" size={22} color={L.cyan} />
-              </View>
-              <View style={styles.taArt}>
-                {HOME_ART.timeAttack ? (
-                  <Image source={HOME_ART.timeAttack} style={StyleSheet.absoluteFill} contentFit="cover" />
-                ) : (
-                  <View style={styles.taPh}>
-                    <Ionicons name="walk" size={56} color="rgba(255,255,255,0.75)" />
-                    <Ionicons name="timer" size={64} color={L.cyan} />
-                    <Ionicons name="walk" size={56} color="rgba(255,255,255,0.75)" />
+          <Pressable
+            testID="streak-champions-card"
+            onPress={() => router.push("/leaderboard")}
+            style={({ pressed }) => [styles.tile, styles.streakCard, pressed && styles.pressed]}
+          >
+            <LinearGradient colors={["#5A1A08", "#3A0E06", "#7A2A05"]} style={StyleSheet.absoluteFill} />
+            <Text numberOfLines={2} style={styles.tileTitle}>STREAK HARIAN</Text>
+            <Text numberOfLines={1} style={styles.tileSub}>Juara hari ini</Text>
+            <View style={styles.avatars}>
+              {topStreaks.length === 0 ? (
+                <Text style={styles.tileSub}>Belum ada streak</Text>
+              ) : (
+                topStreaks.slice(0, 3).map((u, i) => (
+                  <View
+                    key={u.user_id}
+                    style={[styles.miniCard, i === 0 && styles.miniCardTop, { marginLeft: i === 0 ? 0 : -8, zIndex: 3 - i }]}
+                  >
+                    {u.picture ? <Image source={u.picture} style={styles.miniImg} /> : <Ionicons name="person" size={14} color={L.white} />}
+                    <Text style={styles.miniDays}>{u.current_streak}🔥</Text>
                   </View>
-                )}
-              </View>
-              <View style={styles.rowBetween}>
-                <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.cardTitle, { fontSize: 15, flex: 1 }]}>TIME ATTACK</Text>
-                <Ionicons name="play-forward" size={20} color={L.cyan} />
-              </View>
-              <Text style={styles.cardSub}>60 detik • jawab sebanyak mungkin</Text>
-            </Pressable>
-
-            <Pressable
-              testID="mode-classic-button"
-              onPress={() => go("classic")}
-              style={({ pressed }) => [styles.card, styles.classicCard, pressed && styles.pressed]}
-            >
-              <LinearGradient colors={["#4A3A0A", "#3A1C06", "#6A1E05"]} style={StyleSheet.absoluteFill} />
-              <Text style={[styles.cardTitle, { textAlign: "right" }]}>MODE{"\n"}CLASSIC</Text>
-              <View style={styles.classicRow}>
-                <View style={styles.classicArt}>
-                  {HOME_ART.classic ? (
-                    <Image source={HOME_ART.classic} style={StyleSheet.absoluteFill} contentFit="contain" />
-                  ) : (
-                    <Ionicons name="trophy" size={58} color={L.gold} style={styles.goldGlowIcon} />
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.classicSubTitle}>Mode Classic</Text>
-                  <Text style={styles.classicInfo}>- 10 soal • poin akurasi • ritme santai</Text>
-                </View>
-              </View>
-              <LinearGradient colors={["rgba(255,122,26,0)", "rgba(255,90,0,0.55)"]} style={styles.fire} pointerEvents="none" />
-            </Pressable>
-
-            <Pressable
-              testID="streak-champions-card"
-              onPress={() => router.push("/leaderboard")}
-              style={({ pressed }) => [styles.card, styles.streakCard, pressed && styles.pressed]}
-            >
-              <LinearGradient colors={["#5A1A08", "#3A0E06", "#7A2A05"]} style={StyleSheet.absoluteFill} />
-              <Text style={[styles.cardTitle, { fontSize: 16 }]}>JUARA STREAK HARI INI</Text>
-              <Text style={styles.cardSub}>Siapa paling rajin main?</Text>
-              <View style={styles.streakRow}>
-                <Ionicons name="play-forward" size={24} color={L.gold} />
-                <View style={styles.avatars}>
-                  {topStreaks.length === 0 ? (
-                    <Text style={styles.cardSub}>Belum ada streak</Text>
-                  ) : (
-                    topStreaks.slice(0, 3).map((u, i) => (
-                      <View
-                        key={u.user_id}
-                        style={[styles.miniCard, i === 0 && styles.miniCardTop, { marginLeft: i === 0 ? 0 : -10, zIndex: 3 - i }]}
-                      >
-                        {u.picture ? (
-                          <Image source={u.picture} style={styles.miniImg} />
-                        ) : (
-                          <Ionicons name="person" size={20} color={L.white} />
-                        )}
-                        <Text style={styles.miniDays}>{u.current_streak}🔥</Text>
-                      </View>
-                    ))
-                  )}
-                </View>
-              </View>
-            </Pressable>
-          </View>
+                ))
+              )}
+            </View>
+          </Pressable>
         </View>
       </ScrollView>
 
@@ -383,7 +335,7 @@ export default function Home() {
   );
 }
 
-const glow = (c: string) => ({ shadowColor: c, shadowOpacity: 0.8, shadowRadius: 12, shadowOffset: { width: 0, height: 0 }, elevation: 8 });
+const glow = (c: string) => ({ shadowColor: c, shadowOpacity: 0.8, shadowRadius: 10, shadowOffset: { width: 0, height: 0 }, elevation: 8 });
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: L.night },
@@ -483,96 +435,52 @@ const styles = StyleSheet.create({
   },
   themeTag: { color: L.muted, fontSize: 9, fontWeight: "800", letterSpacing: 1.5 },
   themeTitle: { color: L.white, fontSize: 13, fontWeight: "900" },
-  bento: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs },
-  col: { flex: 1, gap: spacing.sm },
-  card: { borderRadius: radius.lg, borderWidth: 2, overflow: "hidden", padding: spacing.md, gap: 4 },
-  pressed: { transform: [{ scale: 0.97 }], opacity: 0.92 },
-  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 4 },
-  cardTitle: {
+  dressChip: {
+    alignSelf: "flex-start",
+    marginLeft: "18%",
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1.5,
+    borderColor: L.cyan,
+  },
+  dressTxt: { color: L.white, fontSize: 13, fontWeight: "900", letterSpacing: 0.5 },
+  mascot: { width: "100%", alignItems: "center", justifyContent: "flex-end" },
+  mascotImg: { width: "100%", height: "100%" },
+  tileRow: { flexDirection: "row", gap: spacing.sm },
+  tile: { flex: 1, aspectRatio: 1, borderRadius: radius.md, borderWidth: 2, overflow: "hidden", padding: spacing.sm, gap: 2 },
+  pressed: { transform: [{ scale: 0.96 }], opacity: 0.92 },
+  tileTitle: {
     color: L.white,
-    fontSize: 20,
+    fontSize: 13,
+    lineHeight: 15,
     fontWeight: "900",
     fontStyle: "italic",
-    letterSpacing: 0,
     textShadowColor: "rgba(0,0,0,0.6)",
     textShadowOffset: { width: 1, height: 2 },
     textShadowRadius: 3,
   },
-  cardSub: { flex: 1, color: L.silver, fontSize: 11, lineHeight: 15 },
-  mascot: { height: 250, alignItems: "center", justifyContent: "flex-end" },
-  dressChip: {
-    position: "absolute", top: 4, right: 0, flexDirection: "row", alignItems: "center", gap: 4,
-    backgroundColor: "rgba(0,0,0,0.55)", borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 4,
-    borderWidth: 1, borderColor: L.cyan,
-  },
-  dressTxt: { color: L.white, fontSize: 10, fontWeight: "900" },
-  mascotPh: { alignItems: "center", justifyContent: "flex-end", flex: 1 },
-  goldBall: {
-    marginTop: -10,
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,194,58,0.18)",
-    ...glow("#FFC23A"),
-  },
-  tourCard: { borderColor: "#E0479E", minHeight: 360, ...glow("#E0479E") },
-  tourArt: { height: 150, alignItems: "center", justifyContent: "center", marginVertical: spacing.sm },
-  trophyGlow: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,111,181,0.18)",
-    ...glow("#FF6FB5"),
-  },
-  lockChip: {
-    position: "absolute",
-    bottom: 10,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    borderWidth: 1.5,
-    borderColor: L.gold,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  tourAboutTitle: { color: L.white, fontSize: 15, fontWeight: "900" },
-  tourAbout: { color: L.silver, fontSize: 11, lineHeight: 15 },
-  aboutCard: { borderColor: "rgba(255,255,255,0.18)", backgroundColor: L.glass },
-  aboutTitle: { color: L.white, fontSize: 17, fontWeight: "900" },
-  aboutBody: { color: L.silver, fontSize: 12, lineHeight: 17 },
-  taCard: { borderColor: L.cyan, minHeight: 330, ...glow(L.cyan) },
-  taArt: { flex: 1, minHeight: 150, marginVertical: spacing.sm, borderRadius: radius.md, overflow: "hidden" },
-  taPh: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(63,208,255,0.15)",
-    borderRadius: radius.md,
-  },
-  classicCard: { borderColor: L.gold, minHeight: 200, ...glow(L.gold) },
-  classicRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.xs },
-  classicArt: { width: 72, height: 80, alignItems: "center", justifyContent: "center" },
+  tileSub: { color: L.silver, fontSize: 10, lineHeight: 13 },
+  tileArt: { flex: 1, alignItems: "center", justifyContent: "center" },
   goldGlowIcon: { textShadowColor: L.orange, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 16 },
-  classicSubTitle: { color: L.white, fontSize: 13, fontWeight: "900", fontStyle: "italic" },
-  classicInfo: { color: L.silver, fontSize: 11, lineHeight: 15, marginTop: 2 },
-  fire: { position: "absolute", left: 0, right: 0, bottom: 0, height: "45%" },
+  taCard: { borderColor: L.cyan, ...glow(L.cyan) },
+  classicCard: { borderColor: L.gold, ...glow(L.gold) },
   f100Card: { borderColor: L.xp, ...glow(L.xp) },
-  f100Slots: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: spacing.sm },
-  f100Slot: { width: 24, height: 24, borderRadius: 6, borderWidth: 1.5, borderColor: L.gold, alignItems: "center", justifyContent: "center" },
-  f100SlotTxt: { color: L.gold, fontSize: 11, fontWeight: "900" },
-  streakCard: { borderColor: L.orange, minHeight: 150, ...glow(L.orange) },
-  streakRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.sm },
-  avatars: { flexDirection: "row", alignItems: "center" },
+  f100Slots: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 },
+  f100Slot: { width: 20, height: 22, borderRadius: 5, borderWidth: 1.5, borderColor: L.gold, alignItems: "center", justifyContent: "center" },
+  f100SlotTxt: { color: L.gold, fontSize: 10, fontWeight: "900" },
+  tourCard: { borderColor: "#E0479E", ...glow("#E0479E") },
+  aboutCard: { borderColor: "rgba(255,255,255,0.25)", backgroundColor: L.glass },
+  streakCard: { borderColor: L.orange, ...glow(L.orange) },
+  avatars: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center" },
   miniCard: {
-    width: 42,
-    height: 56,
-    borderRadius: 8,
+    width: 28,
+    height: 38,
+    borderRadius: 6,
     backgroundColor: "#3B2A7A",
     borderWidth: 1.5,
     borderColor: "#8C7BFF",
@@ -580,7 +488,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     overflow: "hidden",
   },
-  miniCardTop: { width: 48, height: 64, borderColor: L.gold, backgroundColor: "#7A1A1A" },
-  miniImg: { width: "100%", height: "78%" },
-  miniDays: { color: L.white, fontSize: 9, fontWeight: "900" },
+  miniCardTop: { width: 32, height: 44, borderColor: L.gold, backgroundColor: "#7A1A1A" },
+  miniImg: { width: "100%", height: "74%" },
+  miniDays: { color: L.white, fontSize: 8, fontWeight: "900" },
 });

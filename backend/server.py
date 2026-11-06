@@ -13,6 +13,7 @@ import string
 import httpx
 import requests
 import re
+import asyncio
 import csv
 import io
 from pathlib import Path
@@ -1154,7 +1155,32 @@ def _card_out(d: dict) -> StoreCardOut:
     return StoreCardOut(**{k: d.get(k) for k in StoreCardOut.model_fields if d.get(k) is not None})
 
 
-async def _store_image(user: dict, image: Optional[UploadFile], card_id: str) -> Optional[str]:
+def _trim_transparent(content: bytes) -> bytes:
+    """Crop empty transparent margins so full-body characters fill their frame."""
+    try:
+        from PIL import Image as PILImage
+        im = PILImage.open(io.BytesIO(content))
+        if im.mode not in ("RGBA", "LA", "P"):
+            return content
+        im = im.convert("RGBA")
+        box = im.getchannel("A").getbbox()
+        if not box or box == (0, 0, im.width, im.height):
+            return content
+        pad = int(max(box[2] - box[0], box[3] - box[1]) * 0.02)
+        box = (max(0, box[0] - pad), max(0, box[1] - pad), min(im.width, box[2] + pad), min(im.height, box[3] + pad))
+        im = im.crop(box)
+        # Cap the size so the lobby loads fast on phones.
+        if im.height > 1400:
+            im = im.resize((max(1, round(im.width * 1400 / im.height)), 1400), PILImage.LANCZOS)
+        out = io.BytesIO()
+        im.save(out, format="PNG", optimize=True)
+        return out.getvalue()
+    except Exception as e:
+        logger.warning("trim failed: %s", e)
+        return content
+
+
+async def _store_image(user: dict, image: Optional[UploadFile], card_id: str, trim: bool = False) -> Optional[str]:
     if image is None:
         return None
     content = await image.read()
@@ -1163,9 +1189,14 @@ async def _store_image(user: dict, image: Optional[UploadFile], card_id: str) ->
     ext = (image.filename or "card.png").rsplit(".", 1)[-1].lower()
     if ext not in ("jpg", "jpeg", "png", "webp", "heic"):
         ext = "png"
+    ctype = image.content_type or f"image/{ext}"
+    if trim:
+        trimmed = await run_in_threadpool(_trim_transparent, content)
+        if trimmed is not content:
+            content, ext, ctype = trimmed, "png", "image/png"
     path = f"{APP_NAME}/uploads/{user['user_id']}/card_{card_id}_{uuid.uuid4().hex[:6]}.{ext}"
     try:
-        await run_in_threadpool(put_object, path, content, image.content_type or f"image/{ext}")
+        await run_in_threadpool(put_object, path, content, ctype)
     except Exception as e:
         logger.exception("card upload failed: %s", e)
         raise HTTPException(status_code=500, detail="card_upload_failed")
@@ -1568,7 +1599,7 @@ async def wardrobe_create(
     if kind not in WARDROBE_KINDS:
         raise HTTPException(status_code=422, detail="invalid_kind")
     item_id = f"wd_{uuid.uuid4().hex[:12]}"
-    url = await _store_image(user, image, item_id)
+    url = await _store_image(user, image, item_id, trim=kind == "character")
     if not url:
         raise HTTPException(status_code=400, detail="empty_image")
     count = await db.wardrobe_items.count_documents({"kind": kind, "deleted_at": {"$exists": False}})
@@ -1711,6 +1742,77 @@ async def matches_create(body: MatchIn, user: dict = Depends(require_admin)):
     }
     await db.matches.insert_one(doc)
     return _match_to_out(doc)
+
+
+WIB = timezone(timedelta(hours=7))
+
+
+def _parse_kickoff(date_s: str, time_s: str) -> Optional[datetime]:
+    """Parse a WIB date + time from CSV (YYYY-MM-DD or DD/MM/YYYY, HH:MM) into UTC."""
+    s = f"{date_s.strip()} {(time_s or '').strip() or '19:00'}".replace("T", " ").replace(".", ":")
+    for fmt in ("%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%d-%m-%Y %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=WIB).astimezone(timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+@api_router.post("/admin/matches/import")
+async def matches_import(file: UploadFile = File(...), user: dict = Depends(require_admin)):
+    """CSV columns: opponent, date, time (WIB), home (home/away), competition (optional)."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty_file")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    try:
+        delimiter = csv.Sniffer().sniff(text.splitlines()[0], delimiters=",;\t").delimiter
+    except Exception:
+        delimiter = ","
+    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+    alias = {"lawan": "opponent", "tanggal": "date", "jam": "time", "kandang": "home", "kompetisi": "competition", "kickoff_at": "date"}
+    now = datetime.now(timezone.utc)
+    docs, errors, dup = [], [], 0
+    seen = set()
+    for i, row in enumerate(reader, start=2):
+        n = {alias.get((k or "").strip().lower(), (k or "").strip().lower()): (v or "").strip() for k, v in row.items() if k}
+        opp = n.get("opponent", "")
+        if not opp or not n.get("date"):
+            errors.append(f"Baris {i}: kolom opponent dan date wajib.")
+            continue
+        ko = _parse_kickoff(n["date"], n.get("time", ""))
+        if not ko:
+            errors.append(f"Baris {i}: format tanggal/jam salah (contoh 2026-08-20 dan 19:00).")
+            continue
+        if ko <= now:
+            errors.append(f"Baris {i}: jadwal sudah lewat, dilewati.")
+            continue
+        key = (opp.lower(), ko)
+        if key in seen or await db.matches.find_one({"opponent": {"$regex": f"^{re.escape(opp)}$", "$options": "i"}, "kickoff_at": ko}):
+            dup += 1
+            continue
+        seen.add(key)
+        h = n.get("home", "home").lower()
+        docs.append({
+            "match_id": f"mt_{uuid.uuid4().hex[:12]}",
+            "opponent": opp[:60],
+            "kickoff_at": ko,
+            "home": h not in ("away", "tandang", "false", "0", "no", "tidak", "a"),
+            "competition": (n.get("competition") or "Liga 1")[:40],
+            "final_home": None,
+            "final_away": None,
+            "created_at": now,
+            "created_by": user["user_id"],
+            "import_batch": now.isoformat(),
+        })
+    if docs:
+        await db.matches.insert_many(docs)
+    if dup:
+        errors.append(f"{dup} jadwal sudah ada, dilewati.")
+    return {"created": len(docs), "skipped": len(errors) - (1 if dup else 0) + dup, "errors": errors[:20]}
 
 
 @api_router.post("/admin/matches/{match_id}/result", response_model=MatchOut)
@@ -2074,7 +2176,7 @@ async def delete_background(user: dict = Depends(require_admin)):
 
 @api_router.post("/admin/app-settings/mascot", response_model=AppSettingsOut)
 async def upload_mascot(image: UploadFile = File(...), user: dict = Depends(require_admin)):
-    url = await _store_image(user, image, "mascot")
+    url = await _store_image(user, image, "mascot", trim=True)
     if not url:
         raise HTTPException(status_code=400, detail="empty_image")
     await db.app_settings.update_one(
@@ -2810,6 +2912,35 @@ class QuizImportResult(BaseModel):
     items: List[QuizItemOut]
 
 
+IMAGE_URL_COLUMNS = ("image_url", "image", "gambar", "foto", "url_gambar", "link_gambar", "image_link")
+
+
+def _direct_image_link(url: str) -> str:
+    """Turn common share links (Google Drive, Dropbox) into direct-download links."""
+    m = re.search(r"drive\.google\.com/(?:file/d/|open\?id=|uc\?(?:.*&)?id=)([\w-]+)", url)
+    if m:
+        return f"https://drive.google.com/uc?export=download&id={m.group(1)}"
+    if "dropbox.com" in url:
+        return re.sub(r"([?&])dl=0", r"\1dl=1", url) if "dl=0" in url else url + ("&" if "?" in url else "?") + "dl=1"
+    return url
+
+
+async def _import_image_from_url(user: dict, url: str, item_id: str) -> Optional[str]:
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as c:
+            r = await c.get(_direct_image_link(url))
+        ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if r.status_code != 200 or not ctype.startswith("image/") or not r.content or len(r.content) > 10 * 1024 * 1024:
+            return None
+        ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(ctype, "jpg")
+        path = f"{APP_NAME}/uploads/{user['user_id']}/qi_{item_id}_{uuid.uuid4().hex[:6]}.{ext}"
+        await run_in_threadpool(put_object, path, r.content, ctype)
+        return f"/api/files/{path}"
+    except Exception as e:
+        logger.warning("csv image fetch failed %s: %s", url, e)
+        return None
+
+
 @api_router.post("/admin/quiz-items/import", response_model=QuizImportResult)
 async def quiz_items_import(
     category: str = Form(...),
@@ -2859,7 +2990,7 @@ async def quiz_items_import(
         d = norm.get("option_d", "")
         ans = norm.get("answer_index", "")
         active_raw = norm.get("active", "true").lower()
-        image_url = norm.get("image_url", "") or None
+        image_url = next((norm[k] for k in IMAGE_URL_COLUMNS if norm.get(k)), None)
         if not prompt or not a or not b or not c or not d:
             skipped += 1
             errors.append(f"Baris {i}: kolom wajib kosong.")
@@ -2886,11 +3017,31 @@ async def quiz_items_import(
             "updated_at": now,
             "created_by": user["user_id"],
             "import_batch": now.isoformat(),
+            "_row": i,
         }
         created.append(doc)
         next_order += 1
 
     if created:
+        # Copy every linked image into our storage so it shows in the question's image slot
+        # (works for Google Drive / Dropbox share links and sites that block hotlinking).
+        sem = asyncio.Semaphore(6)
+
+        async def _fetch(doc: dict, row_no: int):
+            src = doc.get("image_url")
+            if not src or src.startswith("/api/"):
+                return
+            async with sem:
+                stored = await _import_image_from_url(user, src, doc["item_id"])
+            if stored:
+                doc["image_url"] = stored
+            elif _direct_image_link(src) != src:
+                # Share-page links never render as images, so drop them and tell the admin.
+                doc["image_url"] = None
+                errors.append(f"Baris {row_no}: gambar dari link tidak bisa diunduh (pastikan link dibagikan publik).")
+            # Otherwise keep the original direct link; the app can still load it.
+
+        await asyncio.gather(*[_fetch(d, d.pop("_row")) for d in created])
         await db.quiz_items.update_many(
             {"category": category, "deleted_at": {"$exists": False}}, {"$inc": {"order_index": len(created)}}
         )
