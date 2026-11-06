@@ -390,13 +390,8 @@ class TestCsvImport:
         assert b["items"][0]["answer_index"] == 3
         mongo_db.quiz_items.delete_many({"prompt": "TEST_semi1"})
 
-    def test_order_index_appends_after_existing(self, base_url, admin_bearer, mongo_db):
-        # Determine current max order_index for trivia
-        existing_cursor = list(mongo_db.quiz_items.find(
-            {"category": "trivia", "deleted_at": {"$exists": False}}
-        ).sort("order_index", -1).limit(1))
-        current_max = existing_cursor[0]["order_index"] if existing_cursor else -1
-
+    def test_order_index_imports_go_to_top(self, base_url, admin_bearer, mongo_db):
+        # Imported rows are placed at the top (order 0..n-1) so admins don't scroll down to edit them.
         csv_text = (
             CSV_HEADER + "\n" +
             "TEST_order1,A,B,C,D,0,true,\n" +
@@ -410,11 +405,13 @@ class TestCsvImport:
             files=files,
         )
         assert r.status_code == 200
-        items = r.json()["items"]
-        orders = sorted([it["order_index"] for it in items])
-        assert orders == [current_max + 1, current_max + 2], (
-            f"expected [{current_max+1},{current_max+2}] got {orders}"
-        )
+        orders = sorted([it["order_index"] for it in r.json()["items"]])
+        assert orders == [0, 1], f"expected [0,1] got {orders}"
+        lst = requests.get(
+            f"{base_url}/api/admin/quiz-items?category=trivia",
+            headers={"Authorization": f"Bearer {admin_bearer['token']}"},
+        ).json()
+        assert [x["prompt"] for x in lst[:2]] == ["TEST_order1", "TEST_order2"]
         mongo_db.quiz_items.delete_many({"prompt": {"$in": ["TEST_order1", "TEST_order2"]}})
 
     def test_import_unauth_401_or_403(self, base_url, user_a):

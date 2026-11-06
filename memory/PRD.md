@@ -63,3 +63,6 @@
 - Opening video: VideoView wrapped in absoluteFill with width/height 100% + contentFit cover (web had rendered native 1080x1920 = "zoomed"). Full-screen portrait like the user's reference frames.
 - Admin uploads lobby mascot (app_settings.mascot_url; POST/DELETE /api/admin/app-settings/mascot) from the Dressing Room admin panel; shown on Home only for users without an outfit.
 - Back-view images for wardrobe items: POST/DELETE /api/admin/wardrobe/{id}/back; long-press menu in the Dressing Room; 360° badge.
+
+## Iteration 24 (Jun 2026)
+- CSV import (quiz items per category + Football 100) now puts the new rows at the top of the admin list (order_index 0..n-1, existing items shifted down with $inc). Test updated: test_order_index_imports_go_to_top.

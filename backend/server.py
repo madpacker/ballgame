@@ -1419,9 +1419,7 @@ async def f100_import(file: UploadFile = File(...), user: dict = Depends(require
     cols = ["prompt"] + [f"answer_{i}" for i in range(1, 5)] + [f"wrong_{i}" for i in range(1, 5)]
     if not reader.fieldnames or not set(cols).issubset({c.strip().lower() for c in reader.fieldnames}):
         raise HTTPException(status_code=422, detail=f"missing_columns:{','.join(cols)}")
-    last = await db.f100_items.find_one({"deleted_at": {"$exists": False}}, sort=[("order_index", -1)])
-    order = (last["order_index"] + 1) if last else 0
-    created, errors = 0, []
+    docs, errors = [], []
     for i, row in enumerate(reader, start=2):
         n = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items() if k}
         a = [n.get(f"answer_{j}", "") for j in range(1, 5)]
@@ -1429,14 +1427,16 @@ async def f100_import(file: UploadFile = File(...), user: dict = Depends(require
         if not n.get("prompt") or any(not x for x in a + w) or len({x.lower() for x in a + w}) != 8:
             errors.append(f"Baris {i}: butuh prompt + 8 jawaban unik.")
             continue
-        await db.f100_items.insert_one({
+        docs.append({
             "item_id": f"f1_{uuid.uuid4().hex[:12]}", "prompt": n["prompt"][:300], "answers": a, "wrong": w,
             "active": n.get("active", "true").lower() not in ("false", "0", "no", "tidak"),
-            "order_index": order, "created_at": datetime.now(timezone.utc),
+            "order_index": len(docs), "created_at": datetime.now(timezone.utc),
         })
-        order += 1
-        created += 1
-    return {"created": created, "skipped": len(errors), "errors": errors[:20]}
+    if docs:
+        # Imported rows go to the top of the admin list; existing items shift down.
+        await db.f100_items.update_many({"deleted_at": {"$exists": False}}, {"$inc": {"order_index": len(docs)}})
+        await db.f100_items.insert_many(docs)
+    return {"created": len(docs), "skipped": len(errors), "errors": errors[:20]}
 
 
 @api_router.post("/f100/start")
@@ -2847,12 +2847,8 @@ async def quiz_items_import(
     errors: List[str] = []
     skipped = 0
 
-    # Determine next order_index for appended items.
-    last = await db.quiz_items.find_one(
-        {"category": category, "deleted_at": {"$exists": False}},
-        sort=[("order_index", -1)],
-    )
-    next_order = (last["order_index"] + 1) if last else 0
+    # New rows go to the top of the admin list (0..n-1); existing items shift down after insert.
+    next_order = 0
 
     for i, row in enumerate(reader, start=2):  # start=2 to account for header row
         norm = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items() if k}
@@ -2895,6 +2891,9 @@ async def quiz_items_import(
         next_order += 1
 
     if created:
+        await db.quiz_items.update_many(
+            {"category": category, "deleted_at": {"$exists": False}}, {"$inc": {"order_index": len(created)}}
+        )
         await db.quiz_items.insert_many(created)
     return QuizImportResult(
         created=len(created),
