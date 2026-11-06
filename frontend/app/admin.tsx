@@ -1482,6 +1482,14 @@ export default function AdminScreen() {
       {resultOpen && (
         <Pressable style={styles.overlay} onPress={() => setResultOpen(null)}>
           <Pressable onPress={(e) => e.stopPropagation()} style={styles.modal}>
+            <Pressable
+              testID="result-close"
+              onPress={() => setResultOpen(null)}
+              hitSlop={8}
+              style={{ position: "absolute", top: spacing.sm, right: spacing.sm, width: 44, height: 44, alignItems: "center", justifyContent: "center", zIndex: 2 }}
+            >
+              <Ionicons name="close" size={24} color={colors.onSurface} />
+            </Pressable>
             <Text style={styles.modalTitle}>HASIL AKHIR</Text>
             <View style={styles.scoreRow}>
               <TextInput
@@ -1923,6 +1931,6 @@ const chipStyles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  chipActive: { borderColor: colors.brandSecondary, backgroundColor: colors.brandTertiary },
+  chipActive: { borderColor: colors.brandSecondary, borderWidth: 2, backgroundColor: colors.brandPrimary },
   chipTxt: { color: colors.onSurface, fontSize: 12, fontWeight: "700" },
 });

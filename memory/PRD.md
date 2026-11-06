@@ -51,3 +51,10 @@
 
 - Tournament: admin category toggles (tournament_categories) + RESET all boards (archived to tournament_archives, royal_points=0). Admin gifts Futcards to users (/api/admin/users/{id}/gift-card) -> profile collection.
 - Football 100 (/f100): 10 Qs, 30s each, 4 ordered slots + 8 options; perfect order=100, else 10/hit; server-scored via /api/f100/start|submit; cumulative leaderboard /f100/leaderboard (attempts, time, accuracy); admin CRUD + CSV (prompt, answer_1..4, wrong_1..4). Counts toward XP.
+- Opening video (assets/video/opening.mp4, expo-video) every launch; login REQUIRED (Google only, Pandit Football login design).
+- Dressing Room (/dressing-room): layered PNG wardrobe (character/top/bottom/shoes) admin upload via + slots, rotation, outfit saved to users.outfit and shown as lobby mascot.
+
+
+## Iteration 22 (Jun 2026)
+- Retested: opening video autoplay on web, LEWATI skip, Google-only login, Dressing Room opened directly + fresh-user SAVE, small-pool Classic scoring, admin UBAH prefill. All pass.
+- Polish: close button on the admin result modal, clearer selected chips, 48px empty-state button.

@@ -13,6 +13,7 @@ import { useAuth } from "@/src/contexts/auth";
 import { absoluteFileUrl, useAppSettings } from "@/src/hooks/useAppSettings";
 import { HOME_ART } from "@/src/data/homeArt";
 import BottomNav from "@/src/components/BottomNav";
+import CharacterStage, { type Outfit, type WItem } from "@/src/components/CharacterStage";
 
 // Game-lobby palette: a fixed night-stadium look that stays identical in every theme.
 const L = {
@@ -43,6 +44,8 @@ export default function Home() {
   const [topStreaks, setTopStreaks] = useState<Streaker[]>([]);
   const [live, setLive] = useState<{ live: boolean; match?: any; minute?: number; multiplier?: number } | null>(null);
   const [xp, setXp] = useState<Xp | null>(null);
+  const [wardrobe, setWardrobe] = useState<WItem[]>([]);
+  const [outfit, setOutfit] = useState<Outfit>({});
   const tourOn = !!settings.tournament_enabled;
 
   useEffect(() => {
@@ -69,6 +72,9 @@ export default function Home() {
         return;
       }
       api<Xp>("/me/xp").then(setXp).catch(() => setXp(null));
+      // Character picked in the Dressing Room is shown as the lobby mascot.
+      api<Outfit>("/me/outfit").then(setOutfit).catch(() => {});
+      api<WItem[]>("/wardrobe").then(setWardrobe).catch(() => {});
     }, [user]),
   );
 
@@ -194,8 +200,10 @@ export default function Home() {
         <View style={styles.bento}>
           {/* Left column */}
           <View style={styles.col}>
-            <View testID="hero-mascot" style={styles.mascot}>
-              {HOME_ART.mascot ? (
+            <Pressable testID="hero-mascot" onPress={() => router.push("/dressing-room")} style={styles.mascot}>
+              {outfit.character_id ? (
+                <CharacterStage items={wardrobe} outfit={outfit} />
+              ) : HOME_ART.mascot ? (
                 <Image source={HOME_ART.mascot} style={StyleSheet.absoluteFill} contentFit="contain" />
               ) : (
                 <View style={styles.mascotPh}>
@@ -205,7 +213,11 @@ export default function Home() {
                   </View>
                 </View>
               )}
-            </View>
+              <View style={styles.dressChip}>
+                <Ionicons name="shirt" size={12} color={L.white} />
+                <Text style={styles.dressTxt}>GANTI GAYA</Text>
+              </View>
+            </Pressable>
 
             <Pressable
               testID="mode-tournament-button"
@@ -486,6 +498,12 @@ const styles = StyleSheet.create({
   },
   cardSub: { flex: 1, color: L.silver, fontSize: 11, lineHeight: 15 },
   mascot: { height: 250, alignItems: "center", justifyContent: "flex-end" },
+  dressChip: {
+    position: "absolute", top: 4, right: 0, flexDirection: "row", alignItems: "center", gap: 4,
+    backgroundColor: "rgba(0,0,0,0.55)", borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 4,
+    borderWidth: 1, borderColor: L.cyan,
+  },
+  dressTxt: { color: L.white, fontSize: 10, fontWeight: "900" },
   mascotPh: { alignItems: "center", justifyContent: "flex-end", flex: 1 },
   goldBall: {
     marginTop: -10,

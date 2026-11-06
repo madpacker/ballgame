@@ -1,5 +1,5 @@
 import { Stack, useRouter, useSegments } from "expo-router";
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { LogBox, StyleSheet, View, ActivityIndicator } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -9,6 +9,7 @@ import { StatusBar } from "expo-status-bar";
 import { AuthProvider, useAuth } from "@/src/contexts/auth";
 import { SkinProvider } from "@/src/contexts/skin";
 import { colors } from "@/src/theme";
+import OpeningVideo from "@/src/components/OpeningVideo";
 
 LogBox.ignoreAllLogs(true);
 
@@ -23,16 +24,19 @@ function RootGate() {
   const router = useRouter();
   const segments = useSegments();
 
+  // Opening highlight video plays once per app launch.
+  const [introDone, setIntroDone] = useState(false);
+  const finishIntro = useCallback(() => setIntroDone(true), []);
+
   useEffect(() => {
     if (loading) return;
     const inAuthRoute = segments[0] === "login";
-    // Public screens: tabs, quiz, result. Login is gated so users can play without login,
-    // but when they reach leaderboard-only actions we push to /login manually.
-    // Just handle the case: if the user comes from /login after signing in, send home.
-    if (user && inAuthRoute) {
-      router.replace("/");
-    }
+    // Login is required: guests always land on /login; signed-in users never see it.
+    if (user && inAuthRoute) router.replace("/");
+    else if (!user && !inAuthRoute) router.replace("/login");
   }, [loading, user, segments, router]);
+
+  if (!introDone) return <OpeningVideo onDone={finishIntro} />;
 
   if (loading) {
     return (

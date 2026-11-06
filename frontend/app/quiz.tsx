@@ -522,6 +522,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brandPrimary,
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.md,
+    minHeight: 48,
     borderRadius: radius.lg,
     flexDirection: "row",
     alignItems: "center",

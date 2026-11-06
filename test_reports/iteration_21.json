@@ -1,0 +1,43 @@
+{
+  "summary": "Iter21: Opening video, required login and Dressing Room. Backend: 12 new wardrobe/outfit tests plus a full regression run (-n 0, 352 tests), all passing. Frontend (375x667): the LEWATI skip and mute buttons work. Guests get sent to /login from /, /leaderboard and /dressing-room. The login screen matches the redesign with no 'Main tanpa login'. Signed-in users are sent away from /login. In the Dressing Room, picking a character or top gives the orange highlight and updates the stage. The rotate buttons and drag both rotate the stage, and the back image shows at 180°. SAVE goes back home and hero-mascot shows the saved outfit. Admins can add items with '+' (file chooser upload) and delete with a long press (confirm dialog, soft-delete). Non-admins see no '+' and the empty slots are disabled. Home, store, f100, tournament, leaderboard and profile all open when logged in. CRITICAL: the opening video never starts on web (black screen until the 45s safety timer). Also, SAVE and back fail with GO_BACK when /dressing-room is opened directly. No deprecated packages detected (no expo-av, expo-barcode-scanner or expo-background-fetch).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/wardrobe", "issue": "No content-type or extension check on the image: any file is accepted and stored as .png (the shared _store_image coerces the extension)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "OpeningVideo", "issue": "The video never plays on web. After 12s+ the <video> is still paused=true at currentTime=0 with readyState=4 and duration 14.8s, so the user sees a black screen with only the LEWATI and mute buttons until the 45s safety timeout fires. RCA: p.play() runs in the useVideoPlayer setup callback. On web, expo-video 57's VideoPlayer.web.js play() loops over _mountedVideos, which is still empty at that point (the VideoView isn't mounted yet), so nothing happens. Calling video.play() by hand later works (muted autoplay is allowed). Fix: start playback after mount, e.g. useEffect(() => { if (status === 'readyToPlay') player.play(); }, [status]), or call player.play() in a mount effect. Consider a shorter safety timeout (~20s). Reference: /app/frontend/src/components/OpeningVideo.tsx:13-17", "testID": "opening-video", "priority": "CRITICAL"},
+      {"component": "DressingRoom save/back", "issue": "When /dressing-room is the first route (deep link or page refresh on web), router.back() after SAVE (and on back-button) has nowhere to go. A red 'The action GO_BACK was not handled' toast appears and the user stays on the screen. The outfit is still saved. Fix: router.canGoBack() ? router.back() : router.replace('/'). Reference: /app/frontend/app/dressing-room.tsx:87,154", "testID": "dressing-save", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "OpeningVideo", "issues": ["opening-sound (48x40) and opening-skip (106x40) are under the 44pt minimum height (minHeight:40)"]},
+      {"screen": "DressingRoom", "issues": ["rotate-left and rotate-right are 40x40, under the 44pt minimum", "Admin upload in the UI only sends the front image; back_image can only be set through the API, so the rotation back view can't be added from the app"]},
+      {"screen": "Home lobby", "issues": ["The 'GANTI GAYA' chip covers the shoes zone of the hero-mascot character, so the shoes are mostly hidden"]}
+    ],
+    "react_native_issues": [
+      {"component": "shadow*/textShadow* styles", "issue": "On web the console warns that the 'shadow*' and 'textShadow*' style props are deprecated (use boxShadow/textShadow). Reference: /app/frontend/app/dressing-room.tsx:207,213; /app/frontend/app/login.tsx:62,75"}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter21_wardrobe_outfit.py", "/app/backend/tests/seed_iter21_fe.py", "/app/test_reports/pytest/pytest_iter21.xml"],
+  "action_items": [
+    "CRITICAL: Fix OpeningVideo web autoplay by calling player.play() once mounted / on status 'readyToPlay' (OpeningVideo.tsx:13-17). Verify on web that currentTime advances and that onDone fires on playToEnd (~15s).",
+    "Dressing Room: replace router.back() with a canGoBack fallback to router.replace('/') for both SAVE and the back button.",
+    "Raise opening-sound, opening-skip, rotate-left and rotate-right to at least 44x44.",
+    "Optional: add a back-image upload in the Dressing Room admin UI; move the GANTI GAYA chip off the mascot's feet; remove the now-dead guest branch in save() (dressing-room.tsx:82), since login is required."
+  ],
+  "critical_code_review_comments": [
+    "dressing-room.tsx:57-61: Pan onChange calls runOnJS(updateBack) on every frame, which means a React setState per frame. Better to call it only when the front/back side actually changes.",
+    "If a saved outfit points to an item that was later soft-deleted, GET /me/outfit still returns the stale id. The home mascot then shows the placeholder body icon (or a layer goes missing). Consider filtering stale ids in outfit_get.",
+    "_layout RootGate: during the intro, auth redirects happen behind the video, which is fine. Login gating works for every route tested."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter21_wardrobe_outfit.py (new)", "/app/backend/tests/seed_iter21_fe.py (new)"],
+  "success_rate": {"backend": "100% (352/352 full regression incl. 12 new)", "frontend": "~85% (all flows pass except the video not autoplaying on web and GO_BACK on direct deep link)"},
+  "seed_data_creation": "TEST_it21fe_admin and TEST_it21fe_user plus 6-8 TEST_ wardrobe items were created for the UI tests, then hard-deleted by their item ids. Afterwards wardrobe_items is empty, no user has an outfit, and no TEST_ users or sessions remain. Tos Joki and real users were not touched.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use seed_iter21_fe.py seed|clean (tokens TEST_tok_it21fe_admin / TEST_tok_it21fe_user; set localStorage 'cakmad.session_token'). Always click opening-skip after every page.goto. Check video playback with document.querySelector('video').paused/currentTime. The shoes row is below the fold: scroll_into_view before a mouse long-press. Admin '+' upload works through page.expect_file_chooser. Run the backend suite in the foreground in chunks of files (a background run gets killed).",
+  "rca_of_issue": "Opening video black screen on web: useVideoPlayer's setup callback runs when the player is created, before VideoView mounts its HTMLVideoElement. On web, VideoPlayer.play() only calls video.play() on _mountedVideos (empty at that moment), so the call is dropped. mountVideoView copies loop/muted/volume but does not resume a pending play. Repro: load the app and evaluate document.querySelector('video').paused after 10s: it is true and currentTime is 0. Mitigation: call player.play() after mount or on statusChange to readyToPlay."
+}

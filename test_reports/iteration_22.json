@@ -1,0 +1,28 @@
+{
+  "summary": "Iter22 retest. Backend: a new 9-test file (test_iter22_small_pool_outfit.py) plus a regression run of the iter21, iter17 and iter16 files (40 tests), all passing. Frontend (375x667 web): CRITICAL FIXED: the opening video now plays on its own. paused=false and currentTime advances (1.76s, 3.76s, 5.76s; duration 14.8s). It closes itself on playToEnd at about 16s and goes to /login for guests; the 25s safety timeout was never needed. LEWATI goes to /login. Google-only login works with no 'Main tanpa login'. Guests are sent to /login from /dressing-room, /store, /profile and /f100. MEDIUM FIXED: opening /dressing-room directly, the back button goes to '/' with no GO_BACK error. Opening it directly again with a fresh user (no outfit), picking character/top/bottom/shoes and pressing SAVE shows the 'Tersimpan!' alert and goes to '/'. The hero-mascot shows the 4 picked layers, and the outfit is saved on the user in the DB. HIGH FIXED (iter17): Classic trivia, which has 1 question, shows the header Q1/1. The result shows BENAR 1 / SALAH 0 / 100%, and POST /api/scores returns 200 with total=1 when answered right away (no 422). The backend still rejects a fast 10-question submit (422 game_too_fast). MEDIUM FIXED (iter17): admin UBAH pre-fills the score 2-1, the scorers and the MOTM. The empty-state 'PILIH KATEGORI LAIN' keeps the mode (/category?mode=time_attack). Regression: store, leaderboard, profile, f100 and tournament all open from home while logged in. No deprecated packages (expo-video is used).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin result modal", "issues": ["Selected and unselected scorer/MOTM chips are hard to tell apart (active rgb(74,21,33) vs inactive rgb(40,44,52) on a dark modal). Add a stronger border or fill for the active chip. There is still no close/X button (iter17 LOW)."]},
+      {"screen": "Quiz empty state", "issues": ["The 'PILIH KATEGORI LAIN' (back-to-category) CTA is 41px tall, under the 44px minimum."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter22_small_pool_outfit.py", "/app/backend/tests/seed_iter22_fe.py", "/app/test_reports/pytest/pytest_iter22.xml"],
+  "action_items": [
+    "LOW: Make the active chip state in the admin result modal clearer, and add a close button.",
+    "LOW: Raise the back-to-category CTA minHeight to 44."
+  ],
+  "critical_code_review_comments": [
+    "admin.tsx has 1928 lines and server.py has 3319 lines. Both should be split into modules.",
+    "dressing-room.tsx:85 has a dead guest branch (router.push('/login')) now that login is required. This is harmless."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter22_small_pool_outfit.py", "/app/backend/tests/seed_iter22_fe.py"],
+  "success_rate": {"backend": "100% (9/9 new + 40/40 regression)", "frontend": "100% of the requested retests"},
+  "seed_data_creation": "TEST_it22_admin and TEST_it22_fresh users and sessions, 8 TEST_it22 wardrobe items and the match mt_TEST_it22. All of it was removed afterwards with seed_iter22_fe.py clean, including scores, best_scores and game_sessions. The leftover check found nothing.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `python /app/backend/tests/seed_iter22_fe.py seed|state|clean`, then run test_iter22_small_pool_outfit.py after the seed. Tokens are TEST_tok_it22_admin and TEST_tok_it22_fresh; set localStorage 'cakmad.session_token'. Click opening-skip after every page.goto. In Python Playwright, dialog handlers must be async and await d.accept(), otherwise the page hangs after window.alert. Trivia has 1 active question; persija, liga and others are empty."
+}

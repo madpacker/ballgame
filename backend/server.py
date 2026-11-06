@@ -1527,6 +1527,86 @@ async def f100_leaderboard(limit: int = 100):
     return out
 
 
+# ---------- Dressing Room (layered PNG wardrobe) ----------
+WARDROBE_KINDS = ("character", "top", "bottom", "shoes")
+
+
+class WardrobeItemOut(BaseModel):
+    item_id: str
+    kind: str
+    name: str
+    image_url: str
+    back_url: Optional[str] = None  # optional back view used when the character is rotated
+    order_index: int = 0
+
+
+class OutfitIn(BaseModel):
+    character_id: Optional[str] = None
+    top_id: Optional[str] = None
+    bottom_id: Optional[str] = None
+    shoes_id: Optional[str] = None
+
+
+def _wi_out(d: dict) -> WardrobeItemOut:
+    return WardrobeItemOut(**{k: d.get(k) for k in WardrobeItemOut.model_fields if d.get(k) is not None})
+
+
+@api_router.get("/wardrobe", response_model=List[WardrobeItemOut])
+async def wardrobe_list():
+    cur = db.wardrobe_items.find({"deleted_at": {"$exists": False}}, {"_id": 0}).sort([("kind", 1), ("order_index", 1)])
+    return [_wi_out(d) async for d in cur]
+
+
+@api_router.post("/admin/wardrobe", response_model=WardrobeItemOut)
+async def wardrobe_create(
+    kind: str = Form(...),
+    name: str = Form(""),
+    image: UploadFile = File(...),
+    back_image: Optional[UploadFile] = File(None),
+    user: dict = Depends(require_admin),
+):
+    if kind not in WARDROBE_KINDS:
+        raise HTTPException(status_code=422, detail="invalid_kind")
+    item_id = f"wd_{uuid.uuid4().hex[:12]}"
+    url = await _store_image(user, image, item_id)
+    if not url:
+        raise HTTPException(status_code=400, detail="empty_image")
+    count = await db.wardrobe_items.count_documents({"kind": kind, "deleted_at": {"$exists": False}})
+    doc = {"item_id": item_id, "kind": kind, "name": (name or kind).strip()[:40], "image_url": url,
+           "back_url": await _store_image(user, back_image, item_id + "b"), "order_index": count,
+           "created_at": datetime.now(timezone.utc)}
+    await db.wardrobe_items.insert_one(doc)
+    return _wi_out(doc)
+
+
+@api_router.delete("/admin/wardrobe/{item_id}")
+async def wardrobe_delete(item_id: str, user: dict = Depends(require_admin)):
+    r = await db.wardrobe_items.update_one({"item_id": item_id}, {"$set": {"deleted_at": datetime.now(timezone.utc)}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="not_found")
+    return {"ok": True}
+
+
+@api_router.get("/me/outfit")
+async def outfit_get(user: dict = Depends(get_current_user)):
+    fresh = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "outfit": 1})
+    return (fresh or {}).get("outfit") or {}
+
+
+@api_router.put("/me/outfit")
+async def outfit_save(body: OutfitIn, user: dict = Depends(get_current_user)):
+    want = {"character_id": "character", "top_id": "top", "bottom_id": "bottom", "shoes_id": "shoes"}
+    outfit = {}
+    for field, kind in want.items():
+        v = getattr(body, field)
+        if v:
+            if not await db.wardrobe_items.find_one({"item_id": v, "kind": kind, "deleted_at": {"$exists": False}}):
+                raise HTTPException(status_code=422, detail=f"invalid_{field}")
+            outfit[field] = v
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"outfit": outfit}})
+    return outfit
+
+
 @api_router.get("/top-streaks", response_model=List[StreakLeader])
 async def top_streaks(limit: int = 5):
     cursor = (
