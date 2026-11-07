@@ -23,6 +23,7 @@ import { api, getToken } from "@/src/api";
 import { uploadForm } from "@/src/utils/upload";
 import TournamentAdmin from "@/src/components/TournamentAdmin";
 import LeagueAdmin from "@/src/components/LeagueAdmin";
+import FoldHeader from "@/src/components/FoldHeader";
 import CategoryLogosAdmin from "@/src/components/CategoryLogosAdmin";
 import StoreAdmin from "@/src/components/StoreAdmin";
 import F100Admin from "@/src/components/F100Admin";
@@ -106,6 +107,9 @@ export default function AdminScreen() {
   const [resultOpen, setResultOpen] = useState<string | null>(null);
   const [resH, setResH] = useState("");
   const [resA, setResA] = useState("");
+  // Long admin lists start folded so the page stays short.
+  const [fold, setFold] = useState<Record<string, boolean>>({});
+  const toggleFold = (k: string) => setFold((f) => ({ ...f, [k]: !f[k] }));
 
   // Background / socials / description
   const { settings, refresh: refreshSettings } = useAppSettings();
@@ -748,6 +752,7 @@ export default function AdminScreen() {
         }${data.missing_logos?.length ? ` Logo belum ditemukan: ${data.missing_logos.slice(0, 5).join(", ")}.` : ""}`,
       });
       refresh();
+      if (data.created > 0) setFold((f) => ({ ...f, matches: true }));
     } catch {
       setMsg({ kind: "err", txt: "Impor CSV jadwal gagal." });
     } finally {
@@ -789,9 +794,10 @@ export default function AdminScreen() {
           data.errors?.length ? ` Masalah: ${data.errors.slice(0, 2).join("; ")}` : ""
         }`,
       });
-      // Reload list.
+      // Reload list and unfold it so the new questions (at the top) are right there.
       const qi = await api<AdminQuizItem[]>(`/admin/quiz-items?category=${quizCat}`);
       setQuizItems(qi);
+      if (data.created > 0) setFold((f) => ({ ...f, quiz: true }));
       if (Platform.OS !== "web")
         Haptics.notificationAsync(
           data.created > 0
@@ -944,10 +950,11 @@ export default function AdminScreen() {
             </Pressable>
           </View>
           {loading && <ActivityIndicator color={colors.brandPrimary} />}
-          {!loading && players.length === 0 && (
+          <FoldHeader testID="fold-players" title="DAFTAR PEMAIN" count={players.length} open={!!fold.players} onToggle={() => toggleFold("players")} />
+          {fold.players && !loading && players.length === 0 && (
             <Text style={styles.muted}>Belum ada pemain. Tambahkan di atas.</Text>
           )}
-          {players.map((p) => (
+          {fold.players && players.map((p) => (
             <View key={p.player_id} style={styles.playerRow}>
               {p.photo_url ? (
                 <Image source={absolutePhotoUrl(p.photo_url)} style={styles.playerAvatar} />
@@ -1089,9 +1096,9 @@ export default function AdminScreen() {
         <LeagueAdmin onMsg={(kind, txt) => setMsg({ kind, txt })} />
 
         <View>
-          <Text style={styles.sectionLabel}>DAFTAR LAGA · {matches.length}</Text>
-          {matches.length === 0 && <Text style={styles.muted}>Belum ada jadwal.</Text>}
-          {matches.map((m) => {
+          <FoldHeader testID="fold-matches" title="DAFTAR LAGA" count={matches.length} open={!!fold.matches} onToggle={() => toggleFold("matches")} />
+          {fold.matches && matches.length === 0 && <Text style={styles.muted}>Belum ada jadwal.</Text>}
+          {fold.matches && matches.map((m) => {
             const dt = new Date(m.kickoff_at);
             return (
               <View key={m.match_id} style={styles.playerRow}>
@@ -1428,13 +1435,17 @@ export default function AdminScreen() {
         </View>
 
         <View>
-          <Text style={styles.sectionLabel}>
-            DAFTAR SOAL {CATEGORY_LABEL[quizCat].toUpperCase()}
-          </Text>
-          {quizItems.length === 0 && (
+          <FoldHeader
+            testID="fold-quiz"
+            title={`DAFTAR SOAL ${CATEGORY_LABEL[quizCat].toUpperCase()}`}
+            count={quizItems.length}
+            open={!!fold.quiz}
+            onToggle={() => toggleFold("quiz")}
+          />
+          {fold.quiz && quizItems.length === 0 && (
             <Text style={styles.muted}>Belum ada soal. Tambahkan di atas.</Text>
           )}
-          {quizItems.map((it, idx) => (
+          {fold.quiz && quizItems.map((it, idx) => (
             <View key={it.item_id} style={styles.playerRow}>
               <View style={styles.reorderCol}>
                 <Pressable
@@ -1598,9 +1609,9 @@ export default function AdminScreen() {
         </View>
 
         <View>
-          <Text style={styles.sectionLabel}>SEMUA BERITA · {news.length}</Text>
-          {news.length === 0 && <Text style={styles.muted}>Belum ada berita.</Text>}
-          {news.map((n) => (
+          <FoldHeader testID="fold-news" title="SEMUA BERITA" count={news.length} open={!!fold.news} onToggle={() => toggleFold("news")} />
+          {fold.news && news.length === 0 && <Text style={styles.muted}>Belum ada berita.</Text>}
+          {fold.news && news.map((n) => (
             <View key={n.news_id} style={styles.playerRow}>
               {n.cover_url ? (
                 <Image source={absoluteFileUrl(n.cover_url) || ""} style={styles.newsThumb} />

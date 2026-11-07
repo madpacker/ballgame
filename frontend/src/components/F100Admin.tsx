@@ -1,5 +1,6 @@
 import { View, Text, Pressable, StyleSheet, TextInput, ActivityIndicator, Switch, Platform, Alert } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
+import FoldHeader from "@/src/components/FoldHeader";
 import * as DocumentPicker from "expo-document-picker";
 import { useCallback, useEffect, useState } from "react";
 
@@ -13,6 +14,7 @@ const EMPTY = ["", "", "", ""];
 
 export default function F100Admin() {
   const [items, setItems] = useState<Item[]>([]);
+  const [listOpen, setListOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [answers, setAnswers] = useState<string[]>(EMPTY);
@@ -68,6 +70,7 @@ export default function F100Admin() {
       if (!res.ok) throw new Error(txt);
       const d = JSON.parse(txt) as { created: number; skipped: number; errors: string[] };
       setMsg({ ok: true, t: `Impor: ${d.created} soal ditambahkan, ${d.skipped} dilewati.${d.errors[0] ? " " + d.errors[0] : ""}` });
+      if (d.created > 0) setListOpen(true);
       load();
     } catch (e) {
       setMsg({ ok: false, t: `Impor gagal: ${String(e).slice(0, 120)}` });
@@ -129,7 +132,8 @@ export default function F100Admin() {
           </Pressable>
         )}
       </View>
-      {items.map((it, i) => (
+      <FoldHeader testID="fold-f100" title="DAFTAR SOAL FOOTBALL 100" count={items.length} open={listOpen} onToggle={() => setListOpen((v) => !v)} />
+      {listOpen && items.map((it, i) => (
         <View key={it.item_id} testID={`f100-item-${it.item_id}`} style={styles.item}>
           <View style={{ flex: 1 }}>
             <Text style={styles.itemTitle} numberOfLines={2}>{i + 1}. {it.prompt}</Text>

@@ -83,3 +83,4 @@
 - GET /api/me/predictions returns all my predictions keyed by match_id.
 - Predictions close 30 min before kickoff (PREDICT_CLOSE_MIN). MatchOut has predict_open + predict_close_at; POST /predict returns 400 predictions_closed. UI shows "Batas prediksi HH:MM WIB" or a locked "Prediksi ditutup" pill (testID pred-closed-<id>).
 - Kickoff times are shown in Asia/Jakarta. Deleted fixtures void their predictions (voided=true) on the leaderboard. Android back closes the popup, then the league view.
+- Admin lists are foldable (FoldHeader component, folded by default): players (fold-players), matches (fold-matches), quiz items (fold-quiz), news (fold-news), F100 (fold-f100). After a CSV import the matching list auto-opens.
