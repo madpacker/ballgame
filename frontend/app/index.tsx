@@ -179,7 +179,7 @@ export default function Home() {
           <Pressable testID="live-boost-banner" onPress={() => router.push("/matches")} style={styles.liveBanner}>
             <View style={styles.liveDot} />
             <Text numberOfLines={1} style={styles.liveTxt}>
-              LIVE {live.minute}&apos; · {live.match.home ? "MU vs " + live.match.opponent : live.match.opponent + " vs MU"} · {live.multiplier}X bonus
+              LIVE {live.minute}&apos; · {live.match.home_team} vs {live.match.away_team} · {live.multiplier}X bonus
             </Text>
             <Ionicons name="chevron-forward" size={18} color={L.white} />
           </Pressable>

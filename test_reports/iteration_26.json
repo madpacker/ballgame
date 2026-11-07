@@ -1,0 +1,46 @@
+{
+  "summary": "Tested the league-based score prediction redesign on backend and frontend. Backend: 15/15 new pytest cases pass (tests/test_iter26_leagues_predictions.py). They cover the 6 leagues and banner upload/delete/404/auth, CSV import (Indonesian and English headers, liga column, 'pertandingan' column, DD/MM/YYYY dates, WIB→UTC conversion, TheSportsDB logos for Madura United/Persija/Arsenal/Chelsea, missing_logos, and skipping past/duplicate/invalid/no-league rows), JSON create with a 422 for an invalid league, admin team-logo fallback that updates existing and new fixtures case-insensitively, the league filter, legacy fixtures being excluded, predict validation (0-99, 401, closed after result), scoring (exact 300, winner 100, draw 100, wrong 0, re-score), the /me/predictions dict, the combined leaderboard and /live-match. Frontend (375x667): the PERTANDINGAN header, both tabs and 6 neon league buttons render. The banner image replaces the gradient. A league shows logos, team names, date/time, stadium and the predict button. The modal has score inputs only, submitting shows 'Prediksimu 2 – 1' with UBAH, FINAL cards show points (+300), the leaderboard tab works and back returns to the league list. Admin: league chips, form, CSV text, LeagueAdmin banner upload (file chooser) and team-logo inputs, the score-only result modal and the 'Home vs Away' list all work. The home live banner shows home_team vs away_team with no crash. One real bug: kickoff times are formatted in the device timezone but labelled 'WIB'.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/matches, POST /api/admin/matches", "issue": "kickoff_at is serialized as '...Z' (Pydantic v2 default), not '+00:00' as stated. /api/live-match (model_dump) returns '+00:00'. Both are valid ISO UTC and JS parses both, so this is only an inconsistency."},
+      {"endpoint": "_resolve_team_logo", "issue": "The first-word fallback ('Persija Jakarta' → 'Persija') can pick the wrong club for generic first words such as 'Real X', 'FC X' or 'AC X', and it caches that wrong badge permanently (url set, no expiry). Consider checking that the result's strTeam/strAlternate contains the full name, or limiting the fallback to Indonesian clubs."},
+      {"endpoint": "GET /api/predictions/leaderboard", "issue": "Points from predictions on soft-deleted or archived matches still count, because the leaderboard does not join on matches.deleted_at. Deleting a scored fixture does not remove its points."},
+      {"endpoint": "GET /api/matches?league=", "issue": "An unknown league value is not validated. It returns [] instead of 422 (harmless)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "matches.tsx kickoff label", "issue": "The date and time are formatted with toLocaleDateString/toLocaleTimeString('id-ID') with no timeZone, then suffixed with 'WIB'. In a UTC browser a 19:00 WIB fixture showed '12.00 WIB'. Phones in WITA/WIT (Bali, Makassar, Papua) or abroad will show the wrong hour. Fix: pass { timeZone: 'Asia/Jakarta' } to both calls (matches.tsx:200-201). Do the same in the admin match list (admin.tsx ~1103).", "testID": "match-<match_id>", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin result modal", "issues": ["The HASIL AKHIR modal does not show which fixture is being scored (no team names or logos). The admin can't confirm the match before 'SIMPAN & NILAI PREDIKSI'.", "set-result-<id> is 32px tall (hitSlop 8 compensates)."]},
+      {"screen": "Matches predict modal", "issues": ["There is no KeyboardAvoidingView. On small phones the number-pad can cover the KIRIM PREDIKSI button.", "Android hardware back exits the screen instead of returning from a league to the league list (no BackHandler)."]},
+      {"screen": "Matches league list", "issues": ["The count pill text is 10px, which is small but readable."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter26_leagues_predictions.py", "/app/backend/tests/seed_iter26_fe.py", "/app/test_reports/pytest/pytest_iter26.xml"],
+  "action_items": [
+    "HIGH: Format kickoff times with timeZone 'Asia/Jakarta' in matches.tsx (lines 200-201) and the admin match list (admin.tsx ~1103) so the 'WIB' label is always correct.",
+    "Show home/away team names (and logos) in the admin HASIL AKHIR modal.",
+    "Optional: tighten the TheSportsDB first-word fallback to avoid wrong cached badges; exclude deleted matches from the prediction leaderboard; add a KeyboardAvoidingView to the predict modal."
+  ],
+  "critical_code_review_comments": [
+    "matches.tsx loadMatches: if /me/predictions throws, the shared catch clears the already-loaded matches (setMatches([])). Fetch predictions in a separate try.",
+    "Leaderboard data loads only on mount (loadLeagues). It does not refresh when the Leaderboard tab is opened.",
+    "No deprecated Expo packages (expo-av/barcode-scanner/background-fetch) found. No leftover opponent/scorer/motm references in app/ or src/."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter26_leagues_predictions.py (new)",
+    "/app/backend/tests/seed_iter26_fe.py (new)",
+    "/app/backend/tests/test_iter17_categories_results.py, test_iter22_small_pool_outfit.py, test_iter25_matches_csv_news_url.py: obsolete match classes marked @pytest.mark.skip"
+  ],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "~95% (all flows work; WIB time display bug)"},
+  "seed_data_creation": "TEST_it26_admin and TEST_it26_user users and sessions (tokens TEST_tok_it26_admin / TEST_tok_it26_user). TEST matches, predictions and test_it26 team_logos were created and then cleaned up with `python seed_iter26_fe.py clean`. The serie_a/laliga test banners were cleared, so league_banners is empty as before. Real club logos cached from TheSportsDB were kept.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run the backend tests with `-n 0`. pytest.ini uses xdist --dist loadscope, which runs the order-dependent classes in parallel. Seed first: `cd /app/backend/tests && python seed_iter26_fe.py seed`. The container clock is Nov 2026 UTC. The Playwright browser is UTC, so WIB labels show UTC times until the timezone fix lands. Other iter22/iter25 failures (news fetch, outfit) happen only because their own seed scripts were not run; they are unrelated to this change.",
+  "rca_of_issue": "WIB label bug: Date.toLocaleTimeString uses the device timezone. The backend correctly stores 19:00 WIB as 12:00Z, but the client renders it in local time and appends a hard-coded 'WIB'."
+}

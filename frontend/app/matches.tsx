@@ -1,105 +1,139 @@
-import { View, Text, Pressable, StyleSheet, ScrollView, TextInput, ActivityIndicator, Platform } from "react-native";
+import { View, Text, Pressable, StyleSheet, ScrollView, TextInput, ActivityIndicator, Platform, ImageBackground, RefreshControl, BackHandler, KeyboardAvoidingView } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useEffect, useState, useCallback } from "react";
 import * as Haptics from "expo-haptics";
 
-import { colors, radius, spacing } from "@/src/theme";
+import { radius, spacing } from "@/src/theme";
 import { useAuth } from "@/src/contexts/auth";
 import { api } from "@/src/api";
-import { absolutePhotoUrl, type ApiPlayer } from "@/src/data/questions";
+import { absoluteFileUrl } from "@/src/hooks/useAppSettings";
 
+// Neon match-centre palette (fixed in every theme, like the lobby).
+const N = { bg: "#04060F", white: "#FFFFFF", muted: "#9AA6C8", red: "#E3262F", glass: "rgba(16,22,44,0.85)", gold: "#FFC23A", green: "#2EE59D" };
+
+// Fallback look for each league button until admin uploads a banner image.
+const LEAGUE_STYLE: Record<string, { colors: [string, string]; glow: string }> = {
+  super_league: { colors: ["#1240B8", "#0A1E5C"], glow: "#3D8BFF" },
+  liga2: { colors: ["#0E8A4A", "#063D22"], glow: "#2EE59D" },
+  laliga: { colors: ["#D4412C", "#1B2744"], glow: "#FF5A3C" },
+  premier_league: { colors: ["#7A0A14", "#3A0408"], glow: "#FF3B4A" },
+  serie_a: { colors: ["#4B2BC8", "#1A1260"], glow: "#8C6BFF" },
+  others: { colors: ["#A0167A", "#3C0838"], glow: "#FF4FD8" },
+};
+
+type League = { key: string; name: string; banner_url?: string | null; upcoming: number };
 type Match = {
   match_id: string;
-  opponent: string;
+  league?: string | null;
+  home_team: string;
+  away_team: string;
+  home_logo?: string | null;
+  away_logo?: string | null;
+  stadium?: string | null;
   kickoff_at: string;
-  home: boolean;
-  competition?: string | null;
   final_home?: number | null;
   final_away?: number | null;
-  scorer_player_ids?: string[];
-  motm_player_id?: string | null;
   status: "upcoming" | "live" | "finished";
+  predict_open?: boolean;
+  predict_close_at?: string | null;
 };
-
-type Prediction = {
-  prediction_id: string;
-  match_id: string;
-  pred_home: number;
-  pred_away: number;
-  scorer_player_id?: string | null;
-  scorer_name?: string | null;
-  motm_player_id?: string | null;
-  motm_name?: string | null;
-  points?: number | null;
-};
-
+type Prediction = { prediction_id: string; match_id: string; pred_home: number; pred_away: number; points?: number | null };
 type LB = { user_id: string; name: string; picture?: string | null; total_points: number; predictions_count: number };
+
+function TeamLogo({ uri, size = 52 }: { uri?: string | null; size?: number }) {
+  if (!uri) {
+    return (
+      <View style={[styles.logoPh, { width: size, height: size, borderRadius: size / 2 }]}>
+        <Ionicons name="shield" size={size * 0.55} color={N.muted} />
+      </View>
+    );
+  }
+  return <Image source={absoluteFileUrl(uri)} style={{ width: size, height: size }} contentFit="contain" />;
+}
 
 export default function MatchesScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
   const [tab, setTab] = useState<"list" | "leaderboard">("list");
+  const [leagues, setLeagues] = useState<League[]>([]);
+  const [league, setLeague] = useState<League | null>(null);
   const [matches, setMatches] = useState<Match[]>([]);
-  const [myPreds, setMyPreds] = useState<Record<string, Prediction | null>>({});
+  const [myPreds, setMyPreds] = useState<Record<string, Prediction>>({});
   const [lb, setLb] = useState<LB[]>([]);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<string | null>(null);
   const [homeInput, setHomeInput] = useState("");
   const [awayInput, setAwayInput] = useState("");
-  const [scorerId, setScorerId] = useState<string | null>(null);
-  const [motmId, setMotmId] = useState<string | null>(null);
-  const [playerBank, setPlayerBank] = useState<ApiPlayer[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const loadLeagues = useCallback(async () => {
     try {
-      const list = await api<Match[]>("/matches");
-      setMatches(list);
-      if (user) {
-        const preds: Record<string, Prediction | null> = {};
-        await Promise.all(
-          list.map(async (m) => {
-            try {
-              const r = await api<{ prediction: Prediction | null }>(`/me/prediction/${m.match_id}`);
-              preds[m.match_id] = r.prediction;
-            } catch {
-              preds[m.match_id] = null;
-            }
-          }),
-        );
-        setMyPreds(preds);
-      }
+      setLeagues(await api<League[]>("/leagues"));
     } catch {
-      setMatches([]);
-    } finally {
-      setLoading(false);
+      setLeagues([]);
     }
-    try {
-      const l = await api<LB[]>("/predictions/leaderboard?limit=50");
-      setLb(l);
-    } catch {}
-  }, [user]);
+    api<LB[]>("/predictions/leaderboard?limit=50").then(setLb).catch(() => {});
+  }, []);
+
+  const loadMatches = useCallback(
+    async (key: string) => {
+      setLoading(true);
+      try {
+        setMatches(await api<Match[]>(`/matches?league=${key}`));
+      } catch {
+        setMatches([]);
+      } finally {
+        setLoading(false);
+      }
+      if (user) api<Record<string, Prediction>>("/me/predictions").then(setMyPreds).catch(() => {});
+    },
+    [user],
+  );
 
   useEffect(() => {
-    refresh();
-    api<ApiPlayer[]>("/players").then(setPlayerBank).catch(() => setPlayerBank([]));
-  }, [refresh]);
+    loadLeagues().finally(() => setLoading(false));
+  }, [loadLeagues]);
+
+  // Android back button: close the popup, then leave the league, then the screen.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (openId) {
+        setOpenId(null);
+        return true;
+      }
+      if (league) {
+        setLeague(null);
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [openId, league]);
+
+  const openLeague = (lg: League) => {
+    if (Platform.OS !== "web") Haptics.selectionAsync();
+    setLeague(lg);
+    loadMatches(lg.key);
+  };
+
+  const goBack = () => {
+    if (league) return setLeague(null);
+    if (router.canGoBack()) router.back();
+    else router.replace("/");
+  };
 
   const openPredict = (m: Match) => {
-    if (!user) {
-      router.push("/login");
-      return;
-    }
+    if (!user) return router.push("/login");
     const existing = myPreds[m.match_id];
     setHomeInput(existing ? String(existing.pred_home) : "");
     setAwayInput(existing ? String(existing.pred_away) : "");
-    setScorerId(existing?.scorer_player_id ?? null);
-    setMotmId(existing?.motm_player_id ?? null);
+    setErr(null);
     setOpenId(m.match_id);
   };
 
@@ -110,19 +144,13 @@ export default function MatchesScreen() {
     if (isNaN(h) || isNaN(a) || h < 0 || a < 0) return;
     setSubmitting(true);
     try {
-      await api(`/matches/${openId}/predict`, {
-        method: "POST",
-        body: JSON.stringify({
-          pred_home: h,
-          pred_away: a,
-          scorer_player_id: scorerId,
-          motm_player_id: motmId,
-        }),
-      });
+      await api(`/matches/${openId}/predict`, { method: "POST", body: JSON.stringify({ pred_home: h, pred_away: a }) });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setOpenId(null);
-      refresh();
+      if (league) loadMatches(league.key);
     } catch {
+      setErr("Prediksi sudah ditutup (30 menit sebelum kick-off) atau gagal dikirim.");
+      if (league) loadMatches(league.key);
     } finally {
       setSubmitting(false);
     }
@@ -130,405 +158,337 @@ export default function MatchesScreen() {
 
   const openMatch = openId ? matches.find((m) => m.match_id === openId) ?? null : null;
 
+  const renderLeagues = () => (
+    <ScrollView
+      contentContainerStyle={[styles.leagueList, { paddingBottom: insets.bottom + spacing.xl }]}
+      refreshControl={<RefreshControl refreshing={false} onRefresh={loadLeagues} tintColor={N.white} />}
+    >
+      {leagues.map((lg) => {
+        const st = LEAGUE_STYLE[lg.key] ?? LEAGUE_STYLE.others;
+        return (
+          <Pressable
+            key={lg.key}
+            testID={`league-${lg.key}`}
+            onPress={() => openLeague(lg)}
+            style={({ pressed }) => [styles.leagueBtn, { borderColor: st.glow, shadowColor: st.glow }, pressed && styles.pressed]}
+          >
+            {lg.banner_url ? (
+              <Image source={absoluteFileUrl(lg.banner_url)} style={StyleSheet.absoluteFill} contentFit="cover" />
+            ) : (
+              <>
+                <LinearGradient colors={st.colors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+                <Text style={styles.leagueName}>{lg.name.toUpperCase()}</Text>
+              </>
+            )}
+            {lg.upcoming > 0 && (
+              <View style={styles.countPill}>
+                <Text style={styles.countTxt}>{lg.upcoming} laga</Text>
+              </View>
+            )}
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+
+  const renderMatches = () => (
+    <ScrollView
+      contentContainerStyle={{ padding: spacing.md, paddingBottom: insets.bottom + spacing.xl, gap: spacing.md }}
+      refreshControl={<RefreshControl refreshing={false} onRefresh={() => league && loadMatches(league.key)} tintColor={N.white} />}
+    >
+      <Text style={styles.leagueTitle}>{league?.name.toUpperCase()}</Text>
+      {loading ? (
+        <ActivityIndicator color={N.white} style={{ marginTop: spacing.xl }} />
+      ) : matches.length === 0 ? (
+        <View style={styles.empty}>
+          <Ionicons name="calendar-outline" size={56} color={N.muted} />
+          <Text style={styles.emptyTitle}>Belum ada jadwal</Text>
+          <Text style={styles.muted}>Admin akan menambah jadwal liga ini segera.</Text>
+        </View>
+      ) : (
+        matches.map((m) => {
+          const mp = myPreds[m.match_id];
+          const ko = new Date(m.kickoff_at);
+          return (
+            <View key={m.match_id} testID={`match-${m.match_id}`} style={styles.matchCard}>
+              <View style={styles.matchHeader}>
+                <View style={[styles.statusPill, m.status === "live" && { backgroundColor: N.red }, m.status === "finished" && { backgroundColor: "#3A4260" }]}>
+                  <Text style={styles.statusTxt}>{m.status === "live" ? "● LIVE" : m.status === "finished" ? "FINAL" : "AKAN DATANG"}</Text>
+                </View>
+                <Text style={styles.kickoff}>
+                  {ko.toLocaleDateString("id-ID", { weekday: "short", day: "numeric", month: "short", timeZone: "Asia/Jakarta" })} ·{" "}
+                  {ko.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} WIB
+                </Text>
+              </View>
+              <View style={styles.matchBody}>
+                <View style={styles.teamCol}>
+                  <TeamLogo uri={m.home_logo} />
+                  <Text numberOfLines={2} style={styles.teamName}>{m.home_team}</Text>
+                </View>
+                <Text style={styles.scoreTxt}>{m.status === "finished" ? `${m.final_home ?? "-"} – ${m.final_away ?? "-"}` : "VS"}</Text>
+                <View style={styles.teamCol}>
+                  <TeamLogo uri={m.away_logo} />
+                  <Text numberOfLines={2} style={styles.teamName}>{m.away_team}</Text>
+                </View>
+              </View>
+              {m.stadium ? (
+                <View style={styles.stadiumRow}>
+                  <Ionicons name="location" size={13} color={N.muted} />
+                  <Text numberOfLines={1} style={styles.stadium}>{m.stadium}</Text>
+                </View>
+              ) : null}
+              {mp ? (
+                <View style={styles.predRow}>
+                  <Ionicons name="checkmark-circle" size={16} color={N.green} />
+                  <Text style={styles.predTxt}>
+                    Prediksimu: <Text style={{ fontWeight: "900" }}>{mp.pred_home} – {mp.pred_away}</Text>
+                    {mp.points != null && ` · ${mp.points > 0 ? "+" + mp.points : "0"} poin`}
+                  </Text>
+                  {m.predict_open && (
+                    <Pressable testID={`edit-pred-${m.match_id}`} onPress={() => openPredict(m)} style={styles.editBtn}>
+                      <Text style={styles.editTxt}>UBAH</Text>
+                    </Pressable>
+                  )}
+                </View>
+              ) : m.predict_open ? (
+                <Pressable testID={`predict-${m.match_id}`} onPress={() => openPredict(m)} style={styles.predBtn}>
+                  <Ionicons name="create" size={16} color={N.white} />
+                  <Text style={styles.predBtnTxt}>PREDIKSI SKOR</Text>
+                </Pressable>
+              ) : (
+                m.status === "upcoming" && (
+                  <View testID={`pred-closed-${m.match_id}`} style={styles.closedPill}>
+                    <Ionicons name="lock-closed" size={14} color={N.muted} />
+                    <Text style={styles.closedTxt}>Prediksi ditutup 30 menit sebelum kick-off</Text>
+                  </View>
+                )
+              )}
+              {m.predict_open && m.predict_close_at ? (
+                <Text style={styles.closeAt}>
+                  Batas prediksi:{" "}
+                  {new Date(m.predict_close_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} WIB
+                </Text>
+              ) : null}
+            </View>
+          );
+        })
+      )}
+    </ScrollView>
+  );
+
+  const renderBoard = () => (
+    <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl }}>
+      {lb.length === 0 ? (
+        <View style={styles.empty}>
+          <Ionicons name="podium-outline" size={56} color={N.muted} />
+          <Text style={styles.emptyTitle}>Belum ada prediksi dinilai</Text>
+          <Text style={styles.muted}>Poin dihitung setelah admin memasukkan hasil akhir.</Text>
+        </View>
+      ) : (
+        lb.map((row, i) => (
+          <View key={row.user_id} style={styles.lbRow}>
+            <Text style={[styles.lbRank, i < 3 && { color: N.gold }]}>#{i + 1}</Text>
+            {row.picture ? (
+              <Image source={row.picture} style={styles.lbAvatar} />
+            ) : (
+              <View style={[styles.lbAvatar, { alignItems: "center", justifyContent: "center" }]}>
+                <Ionicons name="person" size={18} color={N.white} />
+              </View>
+            )}
+            <View style={{ flex: 1 }}>
+              <Text style={styles.lbName}>{row.name}</Text>
+              <Text style={styles.lbSub}>{row.predictions_count} prediksi</Text>
+            </View>
+            <Text style={styles.lbPts}>{row.total_points}</Text>
+          </View>
+        ))
+      )}
+    </ScrollView>
+  );
+
   return (
-    <View style={styles.container}>
+    <ImageBackground source={require("@/assets/bg/stadium.jpg")} style={styles.container} resizeMode="cover">
+      <LinearGradient colors={["rgba(4,6,15,0.92)", "rgba(4,6,15,0.85)", "rgba(4,6,15,0.97)"]} style={StyleSheet.absoluteFill} />
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable testID="back-button" onPress={() => router.back()} hitSlop={10} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
+        <Pressable testID="back-button" onPress={goBack} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={30} color={N.white} />
         </Pressable>
         <Text style={styles.headerTitle}>PERTANDINGAN</Text>
-        <View style={{ width: 32 }} />
+        <View style={{ width: 44 }} />
       </View>
 
       <View style={styles.tabs}>
-        <Pressable
-          testID="tab-list"
-          onPress={() => setTab("list")}
-          style={[styles.tab, tab === "list" && styles.tabActive]}
-        >
+        <Pressable testID="tab-list" onPress={() => setTab("list")} style={[styles.tab, tab === "list" && styles.tabActive]}>
           <Text style={[styles.tabTxt, tab === "list" && styles.tabTxtActive]}>Jadwal & Prediksi</Text>
         </Pressable>
-        <Pressable
-          testID="tab-leaderboard"
-          onPress={() => setTab("leaderboard")}
-          style={[styles.tab, tab === "leaderboard" && styles.tabActive]}
-        >
+        <Pressable testID="tab-leaderboard" onPress={() => setTab("leaderboard")} style={[styles.tab, tab === "leaderboard" && styles.tabActive]}>
           <Text style={[styles.tabTxt, tab === "leaderboard" && styles.tabTxtActive]}>Leaderboard</Text>
         </Pressable>
       </View>
 
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.brandPrimary} />
-        </View>
-      ) : tab === "list" ? (
-        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl, gap: spacing.md }}>
-          {matches.length === 0 && (
-            <View style={styles.empty}>
-              <Ionicons name="calendar-outline" size={56} color={colors.muted} />
-              <Text style={styles.emptyTitle}>Belum ada jadwal</Text>
-              <Text style={styles.muted}>Admin akan menambah jadwal pertandingan segera.</Text>
-            </View>
-          )}
-          {matches.map((m) => {
-            const mp = myPreds[m.match_id];
-            const kickoff = new Date(m.kickoff_at);
-            return (
-              <View key={m.match_id} style={styles.matchCard}>
-                <View style={styles.matchHeader}>
-                  <View style={[styles.statusPill, m.status === "live" && { backgroundColor: colors.error }, m.status === "finished" && { backgroundColor: colors.muted }]}>
-                    {m.status === "live" && <View style={styles.liveDot} />}
-                    <Text style={styles.statusTxt}>
-                      {m.status === "live" ? "LIVE" : m.status === "finished" ? "FINAL" : "AKAN DATANG"}
-                    </Text>
-                  </View>
-                  <Text style={styles.matchComp}>{m.competition ?? "Liga 1"}</Text>
-                </View>
-
-                <View style={styles.matchBody}>
-                  <View style={styles.teamCol}>
-                    <Text style={styles.teamName}>{m.home ? "Madura United" : m.opponent}</Text>
-                    <Text style={styles.teamTag}>{m.home ? "HOME" : "AWAY"}</Text>
-                  </View>
-                  <View style={styles.scoreCol}>
-                    {m.status === "finished" ? (
-                      <Text style={styles.scoreTxt}>{m.final_home} – {m.final_away}</Text>
-                    ) : (
-                      <Text style={styles.scoreTxt}>VS</Text>
-                    )}
-                    <Text style={styles.kickoff}>{kickoff.toLocaleDateString("id-ID", { day: "numeric", month: "short" })}</Text>
-                    <Text style={styles.kickoff}>{kickoff.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB</Text>
-                  </View>
-                  <View style={styles.teamCol}>
-                    <Text style={styles.teamName}>{m.home ? m.opponent : "Madura United"}</Text>
-                    <Text style={styles.teamTag}>{m.home ? "AWAY" : "HOME"}</Text>
-                  </View>
-                </View>
-
-                {mp ? (
-                  <View style={styles.predRow}>
-                    <Ionicons name="checkmark-circle" size={16} color={colors.success} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.predTxt}>
-                        Prediksi: <Text style={{ fontWeight: "900" }}>{mp.pred_home} – {mp.pred_away}</Text>
-                        {mp.points != null && ` · ${mp.points > 0 ? "+" + mp.points : "0"} poin`}
-                      </Text>
-                      {(mp.scorer_name || mp.motm_name) && (
-                        <Text style={styles.predSubTxt}>
-                          {mp.scorer_name ? `⚽ ${mp.scorer_name}` : ""}
-                          {mp.scorer_name && mp.motm_name ? "  ·  " : ""}
-                          {mp.motm_name ? `🏆 ${mp.motm_name}` : ""}
-                        </Text>
-                      )}
-                    </View>
-                    {m.status === "upcoming" && (
-                      <Pressable onPress={() => openPredict(m)} hitSlop={6}>
-                        <Text style={styles.editTxt}>Edit</Text>
-                      </Pressable>
-                    )}
-                  </View>
-                ) : (
-                  m.status === "upcoming" && (
-                    <Pressable testID={`predict-${m.match_id}`} onPress={() => openPredict(m)} style={styles.predBtn}>
-                      <Ionicons name="create" size={16} color={colors.onBrandPrimary} />
-                      <Text style={styles.predBtnTxt}>PREDIKSI SKOR</Text>
-                    </Pressable>
-                  )
-                )}
-              </View>
-            );
-          })}
-        </ScrollView>
-      ) : (
-        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl }}>
-          {lb.length === 0 ? (
-            <View style={styles.empty}>
-              <Ionicons name="podium-outline" size={56} color={colors.muted} />
-              <Text style={styles.emptyTitle}>Belum ada prediksi dinilai</Text>
-              <Text style={styles.muted}>Admin perlu memasukkan hasil akhir supaya poin dihitung.</Text>
-            </View>
-          ) : (
-            lb.map((row, i) => (
-              <View key={row.user_id} style={styles.lbRow}>
-                <Text style={styles.lbRank}>#{i + 1}</Text>
-                {row.picture ? (
-                  <Image source={row.picture} style={styles.lbAvatar} />
-                ) : (
-                  <View style={[styles.lbAvatar, { alignItems: "center", justifyContent: "center" }]}>
-                    <Ionicons name="person" size={18} color={colors.onSurface} />
-                  </View>
-                )}
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.lbName}>{row.name}</Text>
-                  <Text style={styles.lbSub}>{row.predictions_count} prediksi</Text>
-                </View>
-                <Text style={styles.lbPts}>{row.total_points}</Text>
-              </View>
-            ))
-          )}
-        </ScrollView>
-      )}
+      {tab === "leaderboard" ? renderBoard() : league ? renderMatches() : loading ? <ActivityIndicator color={N.white} style={{ marginTop: 60 }} /> : renderLeagues()}
 
       {openId && openMatch && (
-        <Pressable
-          style={styles.overlay}
-          onPress={() => setOpenId(null)}
-          testID="predict-modal-overlay"
-        >
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.overlay}>
+        <Pressable style={styles.overlayPress} onPress={() => setOpenId(null)} testID="predict-modal-overlay">
           <Pressable onPress={(e) => e.stopPropagation()} style={styles.modal}>
             <Text style={styles.modalTitle}>PREDIKSI SKOR</Text>
-            <Text style={styles.modalSub}>
-              {openMatch.home ? "Madura United" : openMatch.opponent} vs {openMatch.home ? openMatch.opponent : "Madura United"}
-            </Text>
             <View style={styles.scoreRow}>
               <View style={styles.scoreInputWrap}>
+                <TeamLogo uri={openMatch.home_logo} size={44} />
                 <TextInput
                   testID="pred-home"
                   keyboardType="number-pad"
                   value={homeInput}
-                  onChangeText={setHomeInput}
+                  onChangeText={(t) => setHomeInput(t.replace(/\D/g, ""))}
                   maxLength={2}
                   style={styles.scoreInput}
                   placeholder="0"
-                  placeholderTextColor={colors.muted}
+                  placeholderTextColor={N.muted}
                 />
-                <Text style={styles.scoreInputLabel}>{openMatch.home ? "MU" : "LAWAN"}</Text>
+                <Text numberOfLines={1} style={styles.scoreInputLabel}>{openMatch.home_team}</Text>
               </View>
               <Text style={styles.scoreDash}>–</Text>
               <View style={styles.scoreInputWrap}>
+                <TeamLogo uri={openMatch.away_logo} size={44} />
                 <TextInput
                   testID="pred-away"
                   keyboardType="number-pad"
                   value={awayInput}
-                  onChangeText={setAwayInput}
+                  onChangeText={(t) => setAwayInput(t.replace(/\D/g, ""))}
                   maxLength={2}
                   style={styles.scoreInput}
                   placeholder="0"
-                  placeholderTextColor={colors.muted}
+                  placeholderTextColor={N.muted}
                 />
-                <Text style={styles.scoreInputLabel}>{openMatch.home ? "LAWAN" : "MU"}</Text>
+                <Text numberOfLines={1} style={styles.scoreInputLabel}>{openMatch.away_team}</Text>
               </View>
             </View>
-            <View style={styles.hintCard}>
-              <Text style={styles.hintTxt}>🎯 Tepat skor +300 · ⚽ Benar pemenang +100 · 🥅 Pencetak gol +150 · 🏆 MOTM +200</Text>
-            </View>
-
-            <Text style={styles.pickerLabel}>⚽ TEBAK PENCETAK GOL (opsional)</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pickerRow}>
-              <Pressable
-                testID="scorer-none"
-                onPress={() => setScorerId(null)}
-                style={[styles.pickerChip, !scorerId && styles.pickerChipActive]}
-              >
-                <Text style={styles.pickerChipTxt}>Tidak pilih</Text>
-              </Pressable>
-              {playerBank.map((p) => (
-                <Pressable
-                  key={p.player_id}
-                  testID={`scorer-${p.player_id}`}
-                  onPress={() => setScorerId(p.player_id)}
-                  style={[styles.pickerChip, scorerId === p.player_id && styles.pickerChipActive]}
-                >
-                  <Text style={styles.pickerChipTxt}>{p.name}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-
-            <Text style={styles.pickerLabel}>🏆 TEBAK MAN OF THE MATCH (opsional)</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pickerRow}>
-              <Pressable
-                testID="motm-none"
-                onPress={() => setMotmId(null)}
-                style={[styles.pickerChip, !motmId && styles.pickerChipActive]}
-              >
-                <Text style={styles.pickerChipTxt}>Tidak pilih</Text>
-              </Pressable>
-              {playerBank.map((p) => (
-                <Pressable
-                  key={p.player_id}
-                  testID={`motm-${p.player_id}`}
-                  onPress={() => setMotmId(p.player_id)}
-                  style={[styles.pickerChip, motmId === p.player_id && styles.pickerChipActive]}
-                >
-                  <Text style={styles.pickerChipTxt}>{p.name}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-
+            <Text style={styles.hintTxt}>🎯 Tepat skor +300 · ⚽ Benar pemenang/seri +100</Text>
+            {err && <Text style={styles.errTxt}>{err}</Text>}
             <Pressable
               testID="submit-pred"
               onPress={submitPredict}
               disabled={submitting || !homeInput || !awayInput}
               style={[styles.modalCta, (submitting || !homeInput || !awayInput) && { opacity: 0.5 }]}
             >
-              {submitting ? (
-                <ActivityIndicator color={colors.onBrandPrimary} />
-              ) : (
-                <Text style={styles.modalCtaTxt}>KIRIM PREDIKSI</Text>
-              )}
+              {submitting ? <ActivityIndicator color={N.white} /> : <Text style={styles.modalCtaTxt}>KIRIM PREDIKSI</Text>}
             </Pressable>
           </Pressable>
         </Pressable>
+        </KeyboardAvoidingView>
       )}
-    </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.surface },
-  header: {
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.md,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm as number,
+  container: { flex: 1, backgroundColor: N.bg },
+  header: { paddingHorizontal: spacing.sm, paddingBottom: spacing.sm, flexDirection: "row", alignItems: "center" },
+  backBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  headerTitle: {
+    flex: 1,
+    color: N.white,
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: 3,
+    textAlign: "center",
+    textShadowColor: "#7FB2FF",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 10,
   },
-  backBtn: { padding: spacing.xs },
-  headerTitle: { flex: 1, color: colors.onSurface, fontSize: 18, fontWeight: "900", letterSpacing: 2, textAlign: "center" },
   tabs: {
     flexDirection: "row",
-    marginHorizontal: spacing.lg,
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.md,
+    marginHorizontal: spacing.md,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.25)",
     padding: 4,
   },
-  tab: { flex: 1, paddingVertical: 10, borderRadius: radius.sm, alignItems: "center" },
-  tabActive: { backgroundColor: colors.brandPrimary },
-  tabTxt: { color: colors.muted, fontWeight: "700", fontSize: 13 },
-  tabTxtActive: { color: colors.onBrandPrimary },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  empty: { padding: spacing.xxxl, alignItems: "center", gap: spacing.sm as number },
-  emptyTitle: { color: colors.onSurface, fontSize: 16, fontWeight: "800", marginTop: spacing.md },
-  muted: { color: colors.muted, fontSize: 13, textAlign: "center" },
-  matchCard: {
-    backgroundColor: colors.surfaceSecondary,
+  tab: { flex: 1, minHeight: 44, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
+  tabActive: { backgroundColor: N.red, shadowColor: N.red, shadowOpacity: 0.8, shadowRadius: 10, shadowOffset: { width: 0, height: 0 }, elevation: 6 },
+  tabTxt: { color: N.muted, fontWeight: "800", fontSize: 15 },
+  tabTxtActive: { color: N.white },
+  leagueList: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, gap: spacing.md },
+  leagueBtn: {
+    height: 92,
     borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: spacing.md as number,
+    borderWidth: 2,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowOpacity: 0.9,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8,
   },
+  pressed: { transform: [{ scale: 0.97 }], opacity: 0.9 },
+  leagueName: {
+    color: N.white,
+    fontSize: 26,
+    fontWeight: "900",
+    fontStyle: "italic",
+    letterSpacing: 0.5,
+    textShadowColor: "rgba(0,0,0,0.6)",
+    textShadowOffset: { width: 1, height: 2 },
+    textShadowRadius: 4,
+  },
+  countPill: { position: "absolute", right: 8, bottom: 6, backgroundColor: "rgba(0,0,0,0.6)", borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 2 },
+  countTxt: { color: N.white, fontSize: 10, fontWeight: "800" },
+  leagueTitle: { color: N.white, fontSize: 18, fontWeight: "900", fontStyle: "italic", letterSpacing: 1, textAlign: "center" },
+  empty: { padding: spacing.xxxl, alignItems: "center", gap: spacing.sm },
+  emptyTitle: { color: N.white, fontSize: 16, fontWeight: "800", marginTop: spacing.md },
+  muted: { color: N.muted, fontSize: 13, textAlign: "center" },
+  matchCard: { backgroundColor: N.glass, borderRadius: radius.lg, padding: spacing.md, borderWidth: 1, borderColor: "rgba(255,255,255,0.15)", gap: spacing.sm },
   matchHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  statusPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: colors.success,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-  },
-  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.onBrandPrimary },
-  statusTxt: { color: colors.onBrandPrimary, fontWeight: "900", fontSize: 10, letterSpacing: 1.5 },
-  matchComp: { color: colors.muted, fontSize: 11, fontWeight: "700" },
-  matchBody: { flexDirection: "row", alignItems: "center", gap: spacing.sm as number },
-  teamCol: { flex: 1, alignItems: "center", gap: 4 },
-  teamName: { color: colors.onSurface, fontWeight: "800", fontSize: 13, textAlign: "center" },
-  teamTag: { color: colors.muted, fontSize: 10, letterSpacing: 1 },
-  scoreCol: { alignItems: "center", gap: 2 },
-  scoreTxt: { color: colors.brandSecondary, fontWeight: "900", fontSize: 20, letterSpacing: 2 },
-  kickoff: { color: colors.muted, fontSize: 11 },
-  predRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm as number,
-    paddingTop: spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.divider,
-  },
-  predTxt: { color: colors.onSurface, fontSize: 12 },
-  predSubTxt: { color: colors.muted, fontSize: 11, marginTop: 2 },
-  pickerLabel: {
-    color: colors.muted,
-    fontSize: 10,
-    letterSpacing: 2,
-    fontWeight: "800",
-    marginTop: spacing.sm,
-  },
-  pickerRow: { paddingVertical: spacing.xs, gap: spacing.sm as number },
-  pickerChip: {
-    flexShrink: 0,
-    paddingHorizontal: spacing.md,
-    height: 36,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceTertiary,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  pickerChipActive: { borderColor: colors.brandSecondary, backgroundColor: colors.brandTertiary },
-  pickerChipTxt: { color: colors.onSurface, fontSize: 12, fontWeight: "700" },
-  editTxt: { color: colors.brandSecondary, fontWeight: "900", fontSize: 11, letterSpacing: 1 },
-  predBtn: {
-    backgroundColor: colors.brandPrimary,
-    borderRadius: radius.md,
-    paddingVertical: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm as number,
-  },
-  predBtnTxt: { color: colors.onBrandPrimary, fontWeight: "900", fontSize: 12, letterSpacing: 1.5 },
-  lbRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md as number,
-    paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.divider,
-  },
-  lbRank: { color: colors.muted, fontWeight: "900", fontSize: 14, width: 32 },
-  lbAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.surfaceSecondary },
-  lbName: { color: colors.onSurface, fontSize: 14, fontWeight: "700" },
-  lbSub: { color: colors.muted, fontSize: 11, marginTop: 2 },
-  lbPts: { color: colors.brandSecondary, fontWeight: "900", fontSize: 18 },
-  overlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(0,0,0,0.75)",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: spacing.lg,
-  },
-  modal: {
-    width: "100%",
-    maxWidth: 360,
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.lg,
-    padding: spacing.xl,
-    gap: spacing.md as number,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-  },
-  modalTitle: { color: colors.onSurface, fontWeight: "900", fontSize: 16, letterSpacing: 2, textAlign: "center" },
-  modalSub: { color: colors.muted, fontSize: 12, textAlign: "center" },
-  scoreRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.md as number },
-  scoreInputWrap: { alignItems: "center", gap: 4 },
+  statusPill: { backgroundColor: "#13804F", paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.pill },
+  statusTxt: { color: N.white, fontWeight: "900", fontSize: 10, letterSpacing: 1.2 },
+  kickoff: { color: N.muted, fontSize: 11, fontWeight: "700" },
+  matchBody: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  teamCol: { flex: 1, alignItems: "center", gap: 6 },
+  teamName: { color: N.white, fontWeight: "800", fontSize: 13, textAlign: "center" },
+  scoreTxt: { color: N.gold, fontWeight: "900", fontSize: 24, letterSpacing: 2, minWidth: 70, textAlign: "center" },
+  logoPh: { backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center" },
+  stadiumRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4 },
+  stadium: { color: N.muted, fontSize: 11 },
+  predRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "rgba(255,255,255,0.2)" },
+  predTxt: { flex: 1, color: N.white, fontSize: 12 },
+  editBtn: { minHeight: 36, paddingHorizontal: spacing.md, justifyContent: "center", borderRadius: radius.md, borderWidth: 1, borderColor: N.gold },
+  editTxt: { color: N.gold, fontWeight: "900", fontSize: 11, letterSpacing: 1 },
+  predBtn: { backgroundColor: N.red, borderRadius: radius.md, minHeight: 46, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm },
+  predBtnTxt: { color: N.white, fontWeight: "900", fontSize: 13, letterSpacing: 1.5 },
+  closedPill: { minHeight: 40, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderRadius: radius.md, backgroundColor: "rgba(255,255,255,0.06)" },
+  closedTxt: { color: N.muted, fontSize: 12, fontWeight: "700" },
+  closeAt: { color: N.muted, fontSize: 11, textAlign: "center" },
+  lbRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingVertical: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "rgba(255,255,255,0.15)" },
+  lbRank: { color: N.muted, fontWeight: "900", fontSize: 14, width: 34 },
+  lbAvatar: { width: 38, height: 38, borderRadius: 19, backgroundColor: "#1B2347" },
+  lbName: { color: N.white, fontSize: 14, fontWeight: "700" },
+  lbSub: { color: N.muted, fontSize: 11, marginTop: 2 },
+  lbPts: { color: N.gold, fontWeight: "900", fontSize: 18 },
+  overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
+  overlayPress: { flex: 1, backgroundColor: "rgba(0,0,0,0.8)", alignItems: "center", justifyContent: "center", padding: spacing.lg },
+  modal: { width: "100%", maxWidth: 380, backgroundColor: "#0C1230", borderRadius: radius.lg, padding: spacing.lg, gap: spacing.md, borderWidth: 1.5, borderColor: N.red },
+  modalTitle: { color: N.white, fontWeight: "900", fontSize: 17, letterSpacing: 2, textAlign: "center" },
+  scoreRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.md },
+  scoreInputWrap: { flex: 1, alignItems: "center", gap: 6 },
   scoreInput: {
-    width: 80,
-    height: 80,
-    backgroundColor: colors.surfaceTertiary,
+    width: 78,
+    height: 78,
+    backgroundColor: "rgba(255,255,255,0.08)",
     borderRadius: radius.md,
-    color: colors.onSurface,
+    color: N.white,
     fontSize: 36,
     fontWeight: "900",
     textAlign: "center",
     borderWidth: 1.5,
-    borderColor: colors.border,
+    borderColor: "rgba(255,255,255,0.3)",
   },
-  scoreInputLabel: { color: colors.muted, fontSize: 11, fontWeight: "700", letterSpacing: 1 },
-  scoreDash: { color: colors.muted, fontSize: 32, fontWeight: "900" },
-  hintCard: { backgroundColor: colors.brandTertiary, padding: spacing.sm, borderRadius: radius.sm },
-  hintTxt: { color: colors.onBrandTertiary, fontSize: 11, textAlign: "center" },
-  modalCta: {
-    backgroundColor: colors.brandPrimary,
-    paddingVertical: 14,
-    borderRadius: radius.md,
-    alignItems: "center",
-  },
-  modalCtaTxt: { color: colors.onBrandPrimary, fontWeight: "900", fontSize: 13, letterSpacing: 2 },
+  scoreInputLabel: { color: N.muted, fontSize: 11, fontWeight: "700", maxWidth: 120 },
+  scoreDash: { color: N.muted, fontSize: 32, fontWeight: "900" },
+  hintTxt: { color: N.muted, fontSize: 12, textAlign: "center" },
+  errTxt: { color: "#FF6B6B", fontSize: 12, textAlign: "center" },
+  modalCta: { backgroundColor: N.red, minHeight: 50, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
+  modalCtaTxt: { color: N.white, fontWeight: "900", fontSize: 14, letterSpacing: 2 },
 });

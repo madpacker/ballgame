@@ -22,6 +22,7 @@ import { useAuth } from "@/src/contexts/auth";
 import { api, getToken } from "@/src/api";
 import { uploadForm } from "@/src/utils/upload";
 import TournamentAdmin from "@/src/components/TournamentAdmin";
+import LeagueAdmin from "@/src/components/LeagueAdmin";
 import CategoryLogosAdmin from "@/src/components/CategoryLogosAdmin";
 import StoreAdmin from "@/src/components/StoreAdmin";
 import F100Admin from "@/src/components/F100Admin";
@@ -34,15 +35,26 @@ const POSITIONS: ("GK" | "DEF" | "MID" | "FWD")[] = ["GK", "DEF", "MID", "FWD"];
 
 type AdminMatch = {
   match_id: string;
-  opponent: string;
+  league?: string | null;
+  home_team: string;
+  away_team: string;
+  home_logo?: string | null;
+  away_logo?: string | null;
+  stadium?: string | null;
   kickoff_at: string;
-  home: boolean;
   final_home?: number | null;
   final_away?: number | null;
-  scorer_player_ids?: string[];
-  motm_player_id?: string | null;
   status: "upcoming" | "live" | "finished";
 };
+
+const LEAGUE_OPTIONS = [
+  { key: "super_league", name: "Super League" },
+  { key: "liga2", name: "Liga 2" },
+  { key: "laliga", name: "LaLiga" },
+  { key: "premier_league", name: "Premier League" },
+  { key: "serie_a", name: "Serie A" },
+  { key: "others", name: "Others" },
+];
 
 type AdminNews = {
   news_id: string;
@@ -85,15 +97,15 @@ export default function AdminScreen() {
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
   const [matches, setMatches] = useState<AdminMatch[]>([]);
-  const [mOpp, setMOpp] = useState("");
+  const [mHomeTeam, setMHomeTeam] = useState("");
+  const [mAwayTeam, setMAwayTeam] = useState("");
+  const [mStadium, setMStadium] = useState("");
+  const [mLeague, setMLeague] = useState("super_league");
   const [mDate, setMDate] = useState("");
-  const [mHome, setMHome] = useState(true);
   const [mSubmitting, setMSubmitting] = useState(false);
   const [resultOpen, setResultOpen] = useState<string | null>(null);
   const [resH, setResH] = useState("");
   const [resA, setResA] = useState("");
-  const [resScorerIds, setResScorerIds] = useState<string[]>([]);
-  const [resMotmId, setResMotmId] = useState<string | null>(null);
 
   // Background / socials / description
   const { settings, refresh: refreshSettings } = useAppSettings();
@@ -303,12 +315,12 @@ export default function AdminScreen() {
   };
 
   const createMatch = async () => {
-    if (!mOpp.trim() || !mDate.trim()) {
-      setMsg({ kind: "err", txt: "Lawan dan tanggal wajib." });
+    if (!mHomeTeam.trim() || !mAwayTeam.trim() || !mDate.trim()) {
+      setMsg({ kind: "err", txt: "Tim tuan rumah, tim tamu dan tanggal wajib." });
       return;
     }
-    // Expect YYYY-MM-DDTHH:MM format in local time (treated as WIB → shift to UTC)
-    const dt = new Date(mDate);
+    // Typed as WIB (UTC+7) regardless of the admin's phone timezone.
+    const dt = new Date(`${mDate.trim().replace(" ", "T")}:00+07:00`);
     if (isNaN(dt.getTime())) {
       setMsg({ kind: "err", txt: "Format tanggal salah. Contoh: 2026-02-20T19:00" });
       return;
@@ -318,14 +330,17 @@ export default function AdminScreen() {
       await api("/admin/matches", {
         method: "POST",
         body: JSON.stringify({
-          opponent: mOpp.trim(),
+          home_team: mHomeTeam.trim(),
+          away_team: mAwayTeam.trim(),
+          stadium: mStadium.trim() || null,
+          league: mLeague,
           kickoff_at: dt.toISOString(),
-          home: mHome,
-          competition: "Liga 1",
         }),
       });
-      setMsg({ kind: "ok", txt: "Jadwal tersimpan." });
-      setMOpp("");
+      setMsg({ kind: "ok", txt: "Jadwal tersimpan. Logo klub diisi otomatis." });
+      setMHomeTeam("");
+      setMAwayTeam("");
+      setMStadium("");
       setMDate("");
       refresh();
     } catch {
@@ -349,25 +364,18 @@ export default function AdminScreen() {
         body: JSON.stringify({
           final_home: h,
           final_away: a,
-          scorer_player_ids: resScorerIds,
-          motm_player_id: resMotmId,
         }),
       });
       setMsg({ kind: "ok", txt: "Hasil tersimpan. Prediksi dinilai otomatis." });
       setResultOpen(null);
       setResH("");
       setResA("");
-      setResScorerIds([]);
-      setResMotmId(null);
       refresh();
     } catch (e) {
       setMsg({ kind: "err", txt: `Gagal simpan hasil. ${String(e).slice(0, 80)}` });
     }
   };
 
-  const toggleScorer = (id: string) => {
-    setResScorerIds((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
-  };
 
   const deleteMatch = async (id: string) => {
     try {
@@ -726,17 +734,18 @@ export default function AdminScreen() {
       const res = await uploadForm(`${BACKEND}/api/admin/matches/import`, {
         headers: { Authorization: `Bearer ${token}` },
         files: { file: { uri: asset.uri, name: asset.name || "jadwal.csv", mimeType: asset.mimeType || "text/csv" } } as any,
+        fields: { league: mLeague },
       });
       if (!res.ok) {
         setMsg({ kind: "err", txt: `Impor gagal: ${(await res.text()).slice(0, 120)}` });
         return;
       }
-      const data: { created: number; skipped: number; errors: string[] } = await res.json();
+      const data: { created: number; skipped: number; errors: string[]; missing_logos?: string[] } = await res.json();
       setMsg({
         kind: data.created > 0 ? "ok" : "err",
         txt: `Impor jadwal: ${data.created} dibuat, ${data.skipped} dilewati.${
           data.errors?.length ? ` ${data.errors.slice(0, 3).join("; ")}` : ""
-        }`,
+        }${data.missing_logos?.length ? ` Logo belum ditemukan: ${data.missing_logos.slice(0, 5).join(", ")}.` : ""}`,
       });
       refresh();
     } catch {
@@ -976,11 +985,37 @@ export default function AdminScreen() {
         <View style={styles.formCard}>
           <Text style={styles.sectionLabel}>JADWAL PERTANDINGAN</Text>
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>Lawan</Text>
+            <Text style={styles.fieldLabel}>Liga (dipakai juga untuk impor CSV)</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm as number }}>
+              {LEAGUE_OPTIONS.map((lg) => (
+                <Pressable
+                  key={lg.key}
+                  testID={`match-league-${lg.key}`}
+                  onPress={() => setMLeague(lg.key)}
+                  style={[chipStyles.chip, mLeague === lg.key && chipStyles.chipActive]}
+                >
+                  <Text style={chipStyles.chipTxt}>{lg.name}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Tim tuan rumah</Text>
             <TextInput
-              testID="match-opponent"
-              value={mOpp}
-              onChangeText={setMOpp}
+              testID="match-home-team"
+              value={mHomeTeam}
+              onChangeText={setMHomeTeam}
+              placeholder="mis. Madura United"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Tim tamu</Text>
+            <TextInput
+              testID="match-away-team"
+              value={mAwayTeam}
+              onChangeText={setMAwayTeam}
               placeholder="mis. Persija Jakarta"
               placeholderTextColor={colors.muted}
               style={styles.input}
@@ -999,23 +1034,15 @@ export default function AdminScreen() {
             />
           </View>
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>Kandang / Tandang</Text>
-            <View style={styles.posRow}>
-              <Pressable
-                testID="match-home"
-                onPress={() => setMHome(true)}
-                style={[styles.posChip, mHome && styles.posChipActive]}
-              >
-                <Text style={[styles.posTxt, mHome && styles.posTxtActive]}>HOME</Text>
-              </Pressable>
-              <Pressable
-                testID="match-away"
-                onPress={() => setMHome(false)}
-                style={[styles.posChip, !mHome && styles.posChipActive]}
-              >
-                <Text style={[styles.posTxt, !mHome && styles.posTxtActive]}>AWAY</Text>
-              </Pressable>
-            </View>
+            <Text style={styles.fieldLabel}>Nama stadion</Text>
+            <TextInput
+              testID="match-stadium"
+              value={mStadium}
+              onChangeText={setMStadium}
+              placeholder="mis. Stadion Gelora Bangkalan"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+            />
           </View>
           <Pressable
             testID="submit-match-button"
@@ -1037,9 +1064,10 @@ export default function AdminScreen() {
         <View style={styles.csvCard}>
           <Text style={styles.csvHeadTxt}>IMPOR JADWAL CSV</Text>
           <Text style={styles.csvDesc}>
-            Kolom: <Text style={styles.csvMono}>opponent, date, time, home, competition</Text>. Contoh baris:{" "}
-            <Text style={styles.csvMono}>Persija, 2026-08-20, 19:00, home, Liga 1</Text>. Jam dalam WIB. home = home/away.
-            competition opsional (default Liga 1). Jadwal yang sudah lewat atau sudah ada dilewati.
+            Kolom: <Text style={styles.csvMono}>tuan_rumah, tim_tamu, tanggal, jam, stadion</Text>. Contoh baris:{" "}
+            <Text style={styles.csvMono}>Madura United, Persija Jakarta, 2026-08-20, 19:00, Stadion Gelora Bangkalan</Text>. Jam
+            dalam WIB. Liga mengikuti pilihan liga di atas (atau kolom <Text style={styles.csvMono}>liga</Text>). Logo klub diisi
+            otomatis. Jadwal yang sudah lewat atau sudah ada dilewati.
           </Text>
           <Pressable
             testID="import-matches-csv-button"
@@ -1058,6 +1086,8 @@ export default function AdminScreen() {
           </Pressable>
         </View>
 
+        <LeagueAdmin onMsg={(kind, txt) => setMsg({ kind, txt })} />
+
         <View>
           <Text style={styles.sectionLabel}>DAFTAR LAGA · {matches.length}</Text>
           {matches.length === 0 && <Text style={styles.muted}>Belum ada jadwal.</Text>}
@@ -1067,11 +1097,12 @@ export default function AdminScreen() {
               <View key={m.match_id} style={styles.playerRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.playerName}>
-                    {m.home ? "MU vs " + m.opponent : m.opponent + " vs MU"}
+                    {m.home_team} vs {m.away_team}
                   </Text>
                   <Text style={styles.playerMeta}>
-                    {m.status.toUpperCase()} · {dt.toLocaleDateString("id-ID")} {dt.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
+                    {(LEAGUE_OPTIONS.find((l) => l.key === m.league)?.name ?? "-")} · {m.status.toUpperCase()} · {dt.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" })} {dt.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} WIB
                     {m.final_home != null && ` · ${m.final_home}-${m.final_away}`}
+                    {(!m.home_logo || !m.away_logo) && " · ⚠ logo belum ada"}
                   </Text>
                 </View>
                 {/* Admin can enter the final score any time (even after the auto "finished" window) and correct it later. */}
@@ -1080,9 +1111,6 @@ export default function AdminScreen() {
                   onPress={() => {
                     setResH(m.final_home != null ? String(m.final_home) : "");
                     setResA(m.final_away != null ? String(m.final_away) : "");
-                    // Keep scorers & MOTM so a score correction doesn't wipe bonus points.
-                    setResScorerIds(m.scorer_player_ids ?? []);
-                    setResMotmId(m.motm_player_id ?? null);
                     setResultOpen(m.match_id);
                   }}
                   hitSlop={8}
@@ -1620,6 +1648,14 @@ export default function AdminScreen() {
               <Ionicons name="close" size={24} color={colors.onSurface} />
             </Pressable>
             <Text style={styles.modalTitle}>HASIL AKHIR</Text>
+            {(() => {
+              const rm = matches.find((x) => x.match_id === resultOpen);
+              return rm ? (
+                <Text testID="result-match-name" style={[styles.muted, { textAlign: "center" }]}>
+                  {rm.home_team} vs {rm.away_team}
+                </Text>
+              ) : null;
+            })()}
             <View style={styles.scoreRow}>
               <TextInput
                 testID="result-home"
@@ -1643,44 +1679,6 @@ export default function AdminScreen() {
                 style={styles.scoreInput}
               />
             </View>
-
-            <Text style={styles.sectionLabel}>⚽ PENCETAK GOL (pilih bisa lebih dari satu)</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm as number }}>
-              {players.map((p) => {
-                const active = resScorerIds.includes(p.player_id);
-                return (
-                  <Pressable
-                    key={p.player_id}
-                    testID={`result-scorer-${p.player_id}`}
-                    onPress={() => toggleScorer(p.player_id)}
-                    style={[chipStyles.chip, active && chipStyles.chipActive]}
-                  >
-                    <Text style={chipStyles.chipTxt}>{p.name}</Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-
-            <Text style={styles.sectionLabel}>🏆 MAN OF THE MATCH</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm as number }}>
-              <Pressable
-                testID="result-motm-none"
-                onPress={() => setResMotmId(null)}
-                style={[chipStyles.chip, !resMotmId && chipStyles.chipActive]}
-              >
-                <Text style={chipStyles.chipTxt}>Tidak pilih</Text>
-              </Pressable>
-              {players.map((p) => (
-                <Pressable
-                  key={p.player_id}
-                  testID={`result-motm-${p.player_id}`}
-                  onPress={() => setResMotmId(p.player_id)}
-                  style={[chipStyles.chip, resMotmId === p.player_id && chipStyles.chipActive]}
-                >
-                  <Text style={chipStyles.chipTxt}>{p.name}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
 
             <Pressable testID="submit-result" onPress={submitResult} style={styles.modalCta}>
               <Text style={styles.modalCtaTxt}>SIMPAN & NILAI PREDIKSI</Text>

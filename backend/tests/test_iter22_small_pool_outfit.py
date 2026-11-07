@@ -90,6 +90,7 @@ class TestFreshOutfit:
 
 
 # Admin match result: GET /matches exposes scorers/MOTM for UBAH pre-fill
+@pytest.mark.skip(reason="obsolete pre-league match schema (opponent/scorer/MOTM); see test_iter26_leagues_predictions.py")
 class TestMatchResult:
     def test_match_has_scorers_motm(self):
         m = next(x for x in requests.get(f"{BASE_URL}/api/matches").json() if x["match_id"] == MID)

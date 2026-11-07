@@ -45,6 +45,7 @@ def H(tok):
 
 
 # ---------- Match result on auto-finished match ----------
+@pytest.mark.skip(reason="obsolete pre-league match schema (opponent/scorer/MOTM); see test_iter26_leagues_predictions.py")
 class TestMatchResult:
     created = []
 

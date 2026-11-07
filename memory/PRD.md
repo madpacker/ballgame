@@ -73,3 +73,13 @@
 - Character/mascot uploads are auto-trimmed (transparent margins) and capped at 1400px height.
 - NEW: POST /api/admin/matches/import (CSV: opponent,date,time(WIB),home,competition; aliases lawan,tanggal,jam,kandang,kompetisi). Skips past/duplicate/invalid rows. Admin button testID import-matches-csv-button.
 - NEW: POST /api/admin/news/fetch-url {url}: decodes Google News links (googlenewsdecoder), extracts the title + clean body text (trafilatura, sponsor/"baca juga" lines filtered), and copies og:image to storage. The admin news form has a link field + AMBIL button (testIDs news-url-input, news-fetch-button); the fetched cover is sent as the cover_url form field on POST /api/admin/news.
+
+## Iteration 26 (Jun 2026) – Prediction leagues
+- /matches page: league buttons (super_league, liga2, laliga, premier_league, serie_a, others) → per-league fixture list → score-only prediction (scorer/MOTM removed; exact 300, winner/draw 100). One combined leaderboard.
+- Match model: league, home_team, away_team, stadium, home_logo, away_logo, kickoff_at. Legacy MU-only matches archived via a startup migration (deleted_at + archived_reason=legacy_pre_leagues, flag legacy_matches_archived_v1).
+- Club logos auto: team_logos cache → TheSportsDB free key 123 (searchteams). Admin manual upload: POST /api/admin/team-logos (name+image) updates existing fixtures.
+- League banners: app_settings.league_banners; POST/DELETE /api/admin/leagues/{key}/banner; GET /api/leagues. Admin component LeagueAdmin.tsx.
+- CSV import: tuan_rumah,tim_tamu,tanggal,jam,stadion (+ liga column, or 'pertandingan' = "A vs B"); league from the admin's selected league form field.
+- GET /api/me/predictions returns all my predictions keyed by match_id.
+- Predictions close 30 min before kickoff (PREDICT_CLOSE_MIN). MatchOut has predict_open + predict_close_at; POST /predict returns 400 predictions_closed. UI shows "Batas prediksi HH:MM WIB" or a locked "Prediksi ditutup" pill (testID pred-closed-<id>).
+- Kickoff times are shown in Asia/Jakarta. Deleted fixtures void their predictions (voided=true) on the leaderboard. Android back closes the popup, then the league view.

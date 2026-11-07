@@ -48,6 +48,7 @@ def _get_match(opp):
 
 
 # ---- Matches CSV import ----
+@pytest.mark.skip(reason="obsolete pre-league match schema (opponent/scorer/MOTM); see test_iter26_leagues_predictions.py")
 class TestMatchesImport:
     def test_non_admin_forbidden(self):
         r = _import(f"opponent,date,time,home\nTEST_X,{FUT},19:00,home\n", USER)
