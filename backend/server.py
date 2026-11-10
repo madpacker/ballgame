@@ -617,12 +617,18 @@ async def players_create(
     previous_clubs: str = Form(""),  # comma-separated
     included_in_quiz: str = Form("true"),
     photo: Optional[UploadFile] = File(None),
+    photo_url: str = Form(""),
     user: dict = Depends(require_admin),
 ):
     if position not in ("GK", "DEF", "MID", "FWD"):
         raise HTTPException(status_code=422, detail="invalid_position")
     player_id = f"pl_{uuid.uuid4().hex[:12]}"
-    photo_url = None
+    stored_photo = None
+    if photo is None and photo_url.strip():
+        stored_photo = await _import_image_from_url(user, photo_url.strip(), player_id)
+        if not stored_photo:
+            raise HTTPException(status_code=422, detail="Foto dari link tidak bisa diunduh. Pastikan link gambar publik.")
+    photo_url = stored_photo
     if photo is not None:
         content = await photo.read()
         if not content:
@@ -651,6 +657,124 @@ async def players_create(
     }
     await db.players.insert_one(doc)
     return PlayerOut(**doc)
+
+
+_POS_ALIAS = {"gk": "GK", "kiper": "GK", "goalkeeper": "GK", "penjaga gawang": "GK", "def": "DEF", "bek": "DEF",
+              "defender": "DEF", "mid": "MID", "gelandang": "MID", "midfielder": "MID", "fwd": "FWD", "fw": "FWD",
+              "penyerang": "FWD", "striker": "FWD", "forward": "FWD"}
+
+
+@api_router.post("/admin/players/import")
+async def players_import(file: UploadFile = File(...), user: dict = Depends(require_admin)):
+    """CSV: name, position (GK/DEF/MID/FWD), years_at_mu, previous_clubs (separated by ;), included_in_quiz, photo_url.
+    Existing players with the same name are updated instead of duplicated."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="empty_file")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    try:
+        delimiter = csv.Sniffer().sniff(text.splitlines()[0], delimiters=",;\t").delimiter
+    except Exception:
+        delimiter = ","
+    alias = {"nama": "name", "posisi": "position", "tahun": "years_at_mu", "tahun_di_mu": "years_at_mu",
+             "klub_sebelumnya": "previous_clubs", "klub": "previous_clubs", "aktif": "included_in_quiz"}
+    alias.update({k: "photo_url" for k in IMAGE_URL_COLUMNS})
+    rows, errors = [], []
+    for i, row in enumerate(csv.DictReader(io.StringIO(text), delimiter=delimiter), start=2):
+        n = {}
+        for k, v in row.items():
+            if k:
+                kk = k.strip().lower()
+                n[alias.get(kk, kk)] = (v or "").strip()
+        pos = _POS_ALIAS.get(n.get("position", "").lower(), n.get("position", "").upper())
+        if not n.get("name") or pos not in ("GK", "DEF", "MID", "FWD"):
+            errors.append(f"Baris {i}: name dan position (GK/DEF/MID/FWD) wajib.")
+            continue
+        rows.append((i, n, pos))
+
+    sem = asyncio.Semaphore(6)
+    created = updated = 0
+
+    async def _one(i: int, n: dict, pos: str):
+        nonlocal created, updated
+        existing = await db.players.find_one(
+            {"name": {"$regex": f"^{re.escape(n['name'])}$", "$options": "i"}, "deleted_at": {"$exists": False}}, {"_id": 0}
+        )
+        player_id = existing["player_id"] if existing else f"pl_{uuid.uuid4().hex[:12]}"
+        fields = {"name": n["name"][:60], "position": pos}
+        if n.get("years_at_mu"):
+            fields["years_at_mu"] = n["years_at_mu"][:20]
+        if n.get("previous_clubs"):
+            fields["previous_clubs"] = [c.strip() for c in re.split(r"[;|]", n["previous_clubs"]) if c.strip()]
+        if n.get("included_in_quiz"):
+            fields["included_in_quiz"] = n["included_in_quiz"].lower() not in ("false", "0", "no", "tidak")
+        if n.get("photo_url"):
+            async with sem:
+                stored = await _import_image_from_url(user, n["photo_url"], player_id)
+            if stored:
+                fields["photo_url"] = stored
+            else:
+                errors.append(f"Baris {i}: foto {n['name']} tidak bisa diunduh dari link.")
+        if existing:
+            await db.players.update_one({"player_id": player_id}, {"$set": fields})
+            updated += 1
+        else:
+            doc = {"player_id": player_id, "years_at_mu": None, "previous_clubs": [], "included_in_quiz": True,
+                   "photo_url": None, "created_at": datetime.now(timezone.utc), "created_by": user["user_id"],
+                   "import_batch": datetime.now(timezone.utc).isoformat()}
+            doc.update(fields)
+            await db.players.insert_one(doc)
+            created += 1
+
+    await asyncio.gather(*[_one(*r) for r in rows])
+    return {"created": created, "updated": updated, "skipped": len(errors), "errors": errors[:20]}
+
+
+# ---------- Public profile (any logged-in user can view another user's profile) ----------
+@api_router.get("/users/{user_id}/profile")
+async def public_profile(user_id: str, viewer: dict = Depends(get_current_user)):
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not u:
+        raise HTTPException(status_code=404, detail="user_not_found")
+    xp = await _user_xp(user_id)
+    best = {"classic": 0, "time_attack": 0}
+    async for b in db.best_scores.find({"user_id": user_id}, {"_id": 0, "mode": 1, "score": 1}):
+        if b.get("mode") in best:
+            best[b["mode"]] = int(b.get("score", 0) or 0)
+    cards = [d async for d in db.user_cards.find({"user_id": user_id}, {"_id": 0, "user_id": 0}).sort("redeemed_at", 1)]
+    badges = [d async for d in db.badges.find({"user_id": user_id}, {"_id": 0, "user_id": 0}).limit(12)]
+    pred = None
+    async for r in db.predictions.aggregate([
+        {"$match": {"user_id": user_id, "points": {"$ne": None}, "voided": {"$ne": True}}},
+        {"$group": {"_id": None, "pts": {"$sum": "$points"}, "n": {"$sum": 1}}},
+    ]):
+        pred = {"points": int(r["pts"]), "count": int(r["n"])}
+    character_url = None
+    cid = (u.get("outfit") or {}).get("character_id")
+    if cid:
+        ch = await db.wardrobe_items.find_one({"item_id": cid, "deleted_at": {"$exists": False}}, {"_id": 0, "image_url": 1})
+        character_url = (ch or {}).get("image_url")
+    # Email stays private; only game info is shown.
+    return {
+        "user_id": user_id,
+        "name": u.get("name"),
+        "picture": u.get("picture"),
+        "username": u.get("username"),
+        "is_admin": bool(u.get("is_admin")),
+        "is_me": viewer["user_id"] == user_id,
+        "xp": xp,
+        "level": xp // XP_PER_LEVEL + 1,
+        "best": best,
+        "current_streak": int(u.get("current_streak", 0) or 0),
+        "best_streak": int(u.get("best_streak", 0) or 0),
+        "predictions": pred or {"points": 0, "count": 0},
+        "cards": cards,
+        "badges": badges,
+        "character_url": character_url,
+    }
 
 
 @api_router.patch("/admin/players/{player_id}")
@@ -3176,16 +3300,81 @@ def _direct_image_link(url: str) -> str:
     return url
 
 
+_BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+
+
+def _unwrap_image_link(url: str) -> str:
+    """Google Images result links (google.com/imgres?imgurl=...) point at a page; take the real image URL."""
+    try:
+        u = httpx.URL(url)
+        host = u.host or ""
+        if "google." in host and u.path.startswith("/imgres") and u.params.get("imgurl"):
+            return u.params.get("imgurl")
+        if "google." in host and u.path == "/url" and (u.params.get("url") or u.params.get("q")):
+            return u.params.get("url") or u.params.get("q")
+    except Exception:
+        pass
+    return url
+
+
+def _looks_like_image(data: bytes) -> Optional[str]:
+    """Detect an image by its bytes (some hosts send application/octet-stream)."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG"):
+        return "image/png"
+    if data.startswith(b"GIF8"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+async def _download_image(url: str) -> Optional[tuple]:
+    """Fetch an image from a direct link, a share link or an HTML page (uses og:image). Returns (bytes, content_type)."""
+    url = _direct_image_link(_unwrap_image_link(url.strip()))
+    headers = {"User-Agent": _BROWSER_UA, "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"}
+    async with httpx.AsyncClient(timeout=25, follow_redirects=True, headers=headers) as c:
+        for _ in range(3):
+            u = httpx.URL(url)
+            r = await c.get(url, headers={"Referer": f"{u.scheme}://{u.host}/"})
+            if r.status_code == 403:
+                # Wikimedia and some CDNs reject browser-looking bots but allow an identified one.
+                r = await c.get(url, headers={"User-Agent": "CakMadQuizBot/1.0 (image import; admin tool)"})
+            if r.status_code != 200 or not r.content:
+                return None
+            final = str(r.url)
+            # Short links (images.app.goo.gl) land on google imgres; unwrap and retry.
+            unwrapped = _unwrap_image_link(final)
+            if unwrapped != final:
+                url = unwrapped
+                continue
+            ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if not ctype.startswith("image/"):
+                ctype = _looks_like_image(r.content) or ctype
+            if ctype.startswith("image/") and ctype != "image/svg+xml":
+                return (r.content, ctype) if len(r.content) <= 10 * 1024 * 1024 else None
+            if "html" in ctype:
+                # A web page (imgur, Pinterest, Wikipedia file page, article): use its preview image.
+                html = r.text
+                m = re.search(r'<meta[^>]+(?:property|name)=["\'](?:og:image(?::secure_url)?|twitter:image)["\'][^>]+content=["\']([^"\']+)', html, re.I) \
+                    or re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\']', html, re.I)
+                if m:
+                    url = str(httpx.URL(final).join(m.group(1).replace("&amp;", "&")))
+                    continue
+            return None
+    return None
+
+
 async def _import_image_from_url(user: dict, url: str, item_id: str) -> Optional[str]:
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as c:
-            r = await c.get(_direct_image_link(url))
-        ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
-        if r.status_code != 200 or not ctype.startswith("image/") or not r.content or len(r.content) > 10 * 1024 * 1024:
+        got = await _download_image(url)
+        if not got:
             return None
+        content, ctype = got
         ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(ctype, "jpg")
         path = f"{APP_NAME}/uploads/{user['user_id']}/qi_{item_id}_{uuid.uuid4().hex[:6]}.{ext}"
-        await run_in_threadpool(put_object, path, r.content, ctype)
+        await run_in_threadpool(put_object, path, content, ctype)
         return f"/api/files/{path}"
     except Exception as e:
         logger.warning("csv image fetch failed %s: %s", url, e)
@@ -3286,11 +3475,13 @@ async def quiz_items_import(
                 stored = await _import_image_from_url(user, src, doc["item_id"])
             if stored:
                 doc["image_url"] = stored
-            elif _direct_image_link(src) != src:
-                # Share-page links never render as images, so drop them and tell the admin.
+            elif re.search(r"\.(jpe?g|png|webp|gif)(\?|$)", src, re.I) and _direct_image_link(src) == src:
+                # Looks like a direct image file our server couldn't reach; the phone may still load it.
+                errors.append(f"Baris {row_no}: gambar belum tersalin ke server, memakai link asli.")
+            else:
+                # A page/share link that is not an image would show an empty box, so drop it and tell the admin.
                 doc["image_url"] = None
-                errors.append(f"Baris {row_no}: gambar dari link tidak bisa diunduh (pastikan link dibagikan publik).")
-            # Otherwise keep the original direct link; the app can still load it.
+                errors.append(f"Baris {row_no}: link gambar tidak bisa diunduh, upload manual (pastikan link publik).")
 
         await asyncio.gather(*[_fetch(d, d.pop("_row")) for d in created])
         await db.quiz_items.update_many(
